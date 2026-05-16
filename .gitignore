@@ -13,5 +13,8 @@ server/audio-cache/*
 # Playwright MCP scratch (screenshots, console logs from automated tests)
 .playwright-mcp/
 
+# Sub-agent verification screenshots from Sonnet
+gate*.png
+
 # Claude Code per-user state (permissions, env). Skills are still tracked.
 .claude/settings.local.json

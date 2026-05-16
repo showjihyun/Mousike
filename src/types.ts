@@ -46,6 +46,7 @@ export interface Song {
   instruments: string[];
   palette: Palette;
   createdAt: Date;
+  audioUrl?: string;
 }
 
 export interface Generation {

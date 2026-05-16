@@ -2,7 +2,8 @@
 // Mousike — Main App
 // Home (Spark Mode) with lineage tracking + Library (with tree view)
 // ============================================================
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { generate as apiGenerate, type Lang } from "./api";
 import { MiniPlayer } from "./components/MiniPlayer";
 import type { SongAction } from "./components/SongCard";
 import { Toast } from "./components/Toast";
@@ -31,10 +32,7 @@ const LOADING_MESSAGES = [
 ];
 
 const TOAST_MS = 2200;
-const GENERATION_MS = 3000;
 const LOADING_MSG_INTERVAL_MS = 700;
-const PROGRESS_TICK_MS = 250;
-const PROGRESS_TICK_SEC = PROGRESS_TICK_MS / 1000;
 
 export function App() {
   const [page, setPage] = useState<Page>("home");
@@ -58,6 +56,7 @@ export function App() {
   const [progress, setProgress] = useState(0);
   const [credits, setCredits] = useState<number>(() => loadCredits() ?? 3);
   const [toast, setToast] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   const findSong = useCallback(
     (id: string): Song | null => {
@@ -79,23 +78,50 @@ export function App() {
   useEffect(() => { saveGenerations(generations); }, [generations]);
   useEffect(() => { saveCredits(credits); }, [credits]);
 
-  // Auto-advance progress when something is playing
+  // Drive audio element from playingId; report progress via audio events
   useEffect(() => {
-    if (!playingId) return;
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (!playingId) {
+      audio.pause();
+      return;
+    }
     const song = findSong(playingId);
-    if (!song) return;
-    const interval = window.setInterval(() => {
-      setProgress((p) => {
-        const next = p + PROGRESS_TICK_SEC / song.durationSec;
-        if (next >= 1) {
-          setPlayingId(null);
-          return 0;
-        }
-        return next;
-      });
-    }, PROGRESS_TICK_MS);
-    return () => window.clearInterval(interval);
+    if (!song?.audioUrl) {
+      // Old localStorage songs have no real audio — don't attempt playback
+      setPlayingId(null);
+      return;
+    }
+    if (audio.src !== song.audioUrl) audio.src = song.audioUrl;
+    audio.play().catch(() => setPlayingId(null));
   }, [playingId, findSong]);
+
+  // Attach audio event listeners once (element is stable across renders)
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const onTimeUpdate = () => setProgress(audio.currentTime / audio.duration);
+    const onEnded = () => { setPlayingId(null); setProgress(0); };
+    const onLoadedMetadata = () => {
+      const dur = audio.duration;
+      setGenerations((gs) =>
+        gs.map((g) => ({
+          ...g,
+          songs: g.songs.map((s) =>
+            s.audioUrl === audio.src ? { ...s, durationSec: dur } : s,
+          ),
+        })),
+      );
+    };
+    audio.addEventListener("timeupdate", onTimeUpdate);
+    audio.addEventListener("ended", onEnded);
+    audio.addEventListener("loadedmetadata", onLoadedMetadata);
+    return () => {
+      audio.removeEventListener("timeupdate", onTimeUpdate);
+      audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("loadedmetadata", onLoadedMetadata);
+    };
+  }, []);
 
   const currentGen = currentGenId ? findGen(currentGenId) : null;
 
@@ -117,7 +143,7 @@ export function App() {
     window.setTimeout(() => setToast(null), TOAST_MS);
   }
 
-  function generate(promptText: string, opts: VariationOptions = {}) {
+  async function generate(promptText: string, opts: VariationOptions = {}) {
     if (!promptText.trim()) return;
     if (credits <= 0) {
       showToast("오늘 무료 생성 한도를 모두 사용했어요. Pro로 업그레이드하세요!");
@@ -136,14 +162,18 @@ export function App() {
       setLoadingMsg(LOADING_MESSAGES[i]);
     }, LOADING_MSG_INTERVAL_MS);
 
-    window.setTimeout(() => {
-      window.clearInterval(msgInterval);
+    try {
+      const backendSongs = await apiGenerate(promptText, lang as Lang);
       const newGen = makeGeneration({
         prompt: promptText,
         parentGenId: opts.parentGenId ?? null,
         parentSongId: opts.parentSongId ?? null,
         variationType: opts.variationType ?? null,
       });
+      newGen.songs = newGen.songs.map((s, idx) => ({
+        ...s,
+        audioUrl: backendSongs[idx]?.audioUrl,
+      }));
       newGen.daysAgo = 0;
       setGenerations((gs) => [newGen, ...gs]);
       setCurrentGenId(newGen.id);
@@ -151,8 +181,13 @@ export function App() {
       setCredits((c) => Math.max(0, c - 1));
       setPlayingId(newGen.songs[0].id);
       setProgress(0);
+    } catch (e) {
+      showToast(`생성 실패: ${e instanceof Error ? e.message : "백엔드를 확인하세요"}`);
+      setStage("idle");
+    } finally {
+      window.clearInterval(msgInterval);
       setPendingParent(null);
-    }, GENERATION_MS);
+    }
   }
 
   function handlePlay(id: string) {
@@ -276,6 +311,8 @@ export function App() {
           )}
         </div>
       </div>
+
+      <audio ref={audioRef} style={{ display: "none" }} />
 
       <MiniPlayer
         song={playingSong}
