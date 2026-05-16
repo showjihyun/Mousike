@@ -1,0 +1,255 @@
+/* ============================================================
+   Notion Design System — Colors & Typography
+   Base tokens and semantic styles.
+   ============================================================ */
+
+/* Font loading — NotionInter substituted with Inter (Google Fonts).
+   NotionInter is a proprietary modified Inter; Inter is the closest OSS match. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  /* ---------- Core palette ---------- */
+  --notion-black: rgba(0, 0, 0, 0.95);        /* near-black, primary text */
+  --notion-white: #ffffff;
+  --notion-blue: #0075de;                      /* primary CTA / link */
+  --notion-blue-active: #005bab;               /* pressed state */
+  --notion-blue-focus: #097fe8;                /* focus ring */
+  --notion-navy: #213183;                      /* brand secondary */
+
+  /* ---------- Warm neutral scale ---------- */
+  --warm-white: #f6f5f4;                       /* alt section bg */
+  --warm-dark: #31302e;                        /* dark surface */
+  --warm-gray-500: #615d59;                    /* secondary text */
+  --warm-gray-300: #a39e98;                    /* placeholder / muted */
+
+  /* ---------- Semantic accents ---------- */
+  --accent-teal: #2a9d99;
+  --accent-green: #1aae39;
+  --accent-orange: #dd5b00;
+  --accent-pink: #ff64c8;
+  --accent-purple: #391c57;
+  --accent-brown: #523410;
+
+  /* ---------- Interactive ---------- */
+  --link-primary: #0075de;
+  --link-light: #62aef0;
+  --badge-blue-bg: #f2f9ff;
+  --badge-blue-text: #097fe8;
+
+  /* ---------- Semantic roles ---------- */
+  --bg: var(--notion-white);
+  --bg-alt: var(--warm-white);
+  --bg-dark: var(--warm-dark);
+
+  --fg: var(--notion-black);                   /* body/headings */
+  --fg-secondary: var(--warm-gray-500);        /* descriptions */
+  --fg-muted: var(--warm-gray-300);            /* placeholders */
+
+  --border: rgba(0, 0, 0, 0.1);                /* whisper border */
+  --border-input: #dddddd;
+
+  /* ---------- Shadows ---------- */
+  --shadow-card:
+    rgba(0,0,0,0.04) 0px 4px 18px,
+    rgba(0,0,0,0.027) 0px 2.025px 7.84688px,
+    rgba(0,0,0,0.02) 0px 0.8px 2.925px,
+    rgba(0,0,0,0.01) 0px 0.175px 1.04062px;
+
+  --shadow-deep:
+    rgba(0,0,0,0.01) 0px 1px 3px,
+    rgba(0,0,0,0.02) 0px 3px 7px,
+    rgba(0,0,0,0.02) 0px 7px 15px,
+    rgba(0,0,0,0.04) 0px 14px 28px,
+    rgba(0,0,0,0.05) 0px 23px 52px;
+
+  --shadow-focus: 0 0 0 2px var(--notion-blue-focus);
+
+  /* ---------- Radii ---------- */
+  --radius-micro: 4px;      /* buttons, inputs */
+  --radius-subtle: 5px;     /* list items */
+  --radius-standard: 8px;   /* small cards */
+  --radius-comfortable: 12px; /* standard cards */
+  --radius-large: 16px;     /* hero cards */
+  --radius-pill: 9999px;    /* badges */
+
+  /* ---------- Spacing (non-rigid, 8px base) ---------- */
+  --space-2: 2px;
+  --space-3: 3px;
+  --space-4: 4px;
+  --space-5: 5px;
+  --space-6: 6px;
+  --space-7: 7px;
+  --space-8: 8px;
+  --space-11: 11px;
+  --space-12: 12px;
+  --space-14: 14px;
+  --space-16: 16px;
+  --space-24: 24px;
+  --space-32: 32px;
+  --space-48: 48px;
+  --space-64: 64px;
+  --space-80: 80px;
+  --space-120: 120px;
+
+  /* ---------- Typography ---------- */
+  --font-sans: "NotionInter", "Inter", -apple-system, system-ui, "Segoe UI",
+               Helvetica, "Apple Color Emoji", Arial, "Segoe UI Emoji",
+               "Segoe UI Symbol";
+
+  /* Font sizes */
+  --fs-display-hero: 64px;
+  --fs-display-secondary: 54px;
+  --fs-section: 48px;
+  --fs-subhead-lg: 40px;
+  --fs-subhead: 26px;
+  --fs-card-title: 22px;
+  --fs-body-lg: 20px;
+  --fs-body: 16px;
+  --fs-nav: 15px;
+  --fs-caption: 14px;
+  --fs-badge: 12px;
+
+  /* Weights */
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  /* Max content width */
+  --content-max: 1200px;
+}
+
+/* ============================================================
+   Semantic typography — ready-to-use classes
+   ============================================================ */
+
+html, body {
+  font-family: var(--font-sans);
+  color: var(--fg);
+  background: var(--bg);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-regular);
+  line-height: 1.50;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Display & headings use lining numerals + localized forms */
+h1, h2, h3, .t-display-hero, .t-display-secondary, .t-section, .t-subhead-lg {
+  font-feature-settings: "lnum", "locl";
+}
+
+.t-display-hero {
+  font-size: var(--fs-display-hero);
+  font-weight: var(--fw-bold);
+  line-height: 1.00;
+  letter-spacing: -2.125px;
+  color: var(--fg);
+}
+
+.t-display-secondary {
+  font-size: var(--fs-display-secondary);
+  font-weight: var(--fw-bold);
+  line-height: 1.04;
+  letter-spacing: -1.875px;
+  color: var(--fg);
+}
+
+.t-section, h1 {
+  font-size: var(--fs-section);
+  font-weight: var(--fw-bold);
+  line-height: 1.00;
+  letter-spacing: -1.5px;
+  color: var(--fg);
+}
+
+.t-subhead-lg, h2 {
+  font-size: var(--fs-subhead-lg);
+  font-weight: var(--fw-bold);
+  line-height: 1.50;
+  color: var(--fg);
+}
+
+.t-subhead, h3 {
+  font-size: var(--fs-subhead);
+  font-weight: var(--fw-bold);
+  line-height: 1.23;
+  letter-spacing: -0.625px;
+  color: var(--fg);
+}
+
+.t-card-title, h4 {
+  font-size: var(--fs-card-title);
+  font-weight: var(--fw-bold);
+  line-height: 1.27;
+  letter-spacing: -0.25px;
+  color: var(--fg);
+}
+
+.t-body-lg {
+  font-size: var(--fs-body-lg);
+  font-weight: var(--fw-semibold);
+  line-height: 1.40;
+  letter-spacing: -0.125px;
+  color: var(--fg);
+}
+
+p, .t-body {
+  font-size: var(--fs-body);
+  font-weight: var(--fw-regular);
+  line-height: 1.50;
+  color: var(--fg);
+}
+
+.t-body-medium { font-weight: var(--fw-medium); }
+.t-body-semibold { font-weight: var(--fw-semibold); }
+.t-body-bold { font-weight: var(--fw-bold); }
+
+.t-nav {
+  font-size: var(--fs-nav);
+  font-weight: var(--fw-semibold);
+  line-height: 1.33;
+  color: var(--fg);
+}
+
+.t-caption {
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-medium);
+  line-height: 1.43;
+  color: var(--fg-secondary);
+}
+
+.t-caption-light {
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-regular);
+  line-height: 1.43;
+  color: var(--fg-secondary);
+}
+
+.t-badge {
+  font-size: var(--fs-badge);
+  font-weight: var(--fw-semibold);
+  line-height: 1.33;
+  letter-spacing: 0.125px;
+}
+
+.t-micro {
+  font-size: var(--fs-badge);
+  font-weight: var(--fw-regular);
+  line-height: 1.33;
+  letter-spacing: 0.125px;
+  color: var(--fg-secondary);
+}
+
+/* Links */
+a {
+  color: var(--link-primary);
+  text-decoration: none;
+}
+a:hover { text-decoration: underline; }
+
+/* Focus ring — applies globally to interactive elements */
+:focus-visible {
+  outline: 2px solid var(--notion-blue-focus);
+  outline-offset: 2px;
+}
