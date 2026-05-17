@@ -1,5 +1,5 @@
 import { Fragment } from "react";
-import { daysAgoLabel } from "../data";
+import { daysAgoLabel, VARIATION_LABELS } from "../data";
 import type { Generation } from "../types";
 import { Icon } from "./Icon";
 
@@ -43,7 +43,7 @@ export function FamilyTree({ generations, onJumpToGen }: FamilyTreeProps) {
             <div className="tg-text">
               <h5 className="tg-title">{gen.prompt}</h5>
               <p className="tg-sub">
-                {depth === 0 ? "🌱 씨앗곡" : `↳ ${gen.variationType === "restyle" ? "다른 스타일" : "비슷한 분위기"}`}
+                {depth === 0 ? "🌱 씨앗곡" : `↳ ${gen.variationType ? VARIATION_LABELS[gen.variationType] : "변형"}`}
                 {" · "}{gen.songs.length}곡
                 {gen.daysAgo != null && ` · ${daysAgoLabel(gen.daysAgo)}`}
               </p>
