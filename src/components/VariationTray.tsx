@@ -26,12 +26,12 @@ export function VariationTray({ likedCount, onVariation }: VariationTrayProps) {
           <span className="vb-title">다른 스타일로</span>
           <span className="vb-sub">멜로디 유지, 톤 변경</span>
         </button>
-        <button className="variation-btn locked" disabled>
+        <button className="variation-btn" onClick={() => onVariation("repaint")}>
           <span className="vb-emoji">✂️</span>
           <span className="vb-title">부분만 다시</span>
-          <span className="vb-sub">파형 드래그 편집</span>
+          <span className="vb-sub">구간 지정 재생성</span>
         </button>
-        <button className="variation-btn locked" disabled>
+        <button className="variation-btn" onClick={() => onVariation("lego")}>
           <span className="vb-emoji">🎸</span>
           <span className="vb-title">악기 추가/빼기</span>
           <span className="vb-sub">레이어 토글</span>

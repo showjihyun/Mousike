@@ -45,7 +45,11 @@ export function HomePage(props: HomePageProps) {
     ? "다른 스타일 변형"
     : currentGen?.variationType === "similar"
       ? "비슷한 분위기 변형"
-      : null;
+      : currentGen?.variationType === "repaint"
+        ? "부분 수정 변형"
+        : currentGen?.variationType === "lego"
+          ? "악기 변경 변형"
+          : null;
 
   const pendingNode: Generation | null = stage === "loading" && pendingParent?.parentGenId
     ? {
@@ -77,7 +81,7 @@ export function HomePage(props: HomePageProps) {
             <span className="accent">음악 놀이터</span>
           </h1>
           <p className="hero-sub">
-            "잔잔한 카페 음악" 한 줄이면 30초 안에 4곡이 나옵니다.<br />
+            "잔잔한 카페 음악" 한 줄이면 30초 샘플 한 곡이 나옵니다.<br />
             마음에 드는 곡은 변형하고, 부분만 다시 만들고, 악기를 더해보세요.
           </p>
         </div>
@@ -115,7 +119,7 @@ export function HomePage(props: HomePageProps) {
               ) : (
                 <Fragment>
                   <Icon name="sparkles" size={18} />
-                  4곡 만들기
+                  곡 만들기
                 </Fragment>
               )}
             </button>
@@ -124,7 +128,7 @@ export function HomePage(props: HomePageProps) {
         <div className="composer-meta">
           <div className="left">
             <span><kbd>Enter</kbd> 생성</span>
-            <span>한 번에 4곡 동시 생성</span>
+            <span>30초 샘플 1곡</span>
             <span>약 30초 소요</span>
           </div>
           <span>{prompt.length}/200</span>
@@ -172,7 +176,7 @@ export function HomePage(props: HomePageProps) {
               <h3 className="stage-title">
                 {stage === "loading"
                   ? (pendingParent?.parentGenId ? "변형을 만드는 중…" : "방금 만든 곡들")
-                  : (currentGen?.parentGenId ? "변형 결과" : "방금 만든 곡 4개")}
+                  : (currentGen?.parentGenId ? "변형 결과" : "방금 만든 곡")}
               </h3>
               <p className="stage-sub">"{prompt}"</p>
             </div>
@@ -197,7 +201,7 @@ export function HomePage(props: HomePageProps) {
 
           <div className="result-grid">
             {stage === "loading"
-              ? [0, 1, 2, 3].map((i) => <SkeletonCard key={i} delay={i * 0.15} />)
+              ? [0].map((i) => <SkeletonCard key={i} delay={i * 0.15} />)
               : currentGen?.songs.map((song, idx) => (
                   <SongCard
                     key={song.id}

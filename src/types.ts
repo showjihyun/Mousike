@@ -1,4 +1,4 @@
-export type VariationType = "similar" | "restyle";
+export type VariationType = "similar" | "restyle" | "repaint" | "lego";
 
 export type Stage = "idle" | "loading" | "results";
 

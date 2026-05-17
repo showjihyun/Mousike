@@ -3,8 +3,10 @@
 // Home (Spark Mode) with lineage tracking + Library (with tree view)
 // ============================================================
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { generate as apiGenerate, type Lang } from "./api";
+import { generate as apiGenerate, repaint as apiRepaint, lego as apiLego, type Lang } from "./api";
+import { LegoModal } from "./components/LegoModal";
 import { MiniPlayer } from "./components/MiniPlayer";
+import { RepaintModal } from "./components/RepaintModal";
 import type { SongAction } from "./components/SongCard";
 import { Toast } from "./components/Toast";
 import { Topbar } from "./components/Topbar";
@@ -27,7 +29,7 @@ const LOADING_MESSAGES = [
   "분위기를 잡는 중…",
   "악기를 고르는 중…",
   "BPM과 키를 결정하는 중…",
-  "4가지 변형을 만드는 중…",
+  "곡을 만드는 중…",
   "마무리 마스터링 중…",
 ];
 
@@ -57,6 +59,11 @@ export function App() {
   const [credits, setCredits] = useState<number>(() => loadCredits() ?? 3);
   const [toast, setToast] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+
+  // Variation modals
+  const [repaintFor, setRepaintFor] = useState<{ song: Song; genId: string } | null>(null);
+  const [legoFor, setLegoFor] = useState<{ song: Song; genId: string } | null>(null);
+  const [modalLoading, setModalLoading] = useState(false);
 
   const findSong = useCallback(
     (id: string): Song | null => {
@@ -227,6 +234,22 @@ export function App() {
       showToast("먼저 마음에 드는 곡에 ❤️ 를 눌러주세요.");
       return;
     }
+    if (kind === "repaint") {
+      if (!liked.audioUrl) {
+        showToast("이 곡에는 오디오가 없어 부분 수정이 불가합니다.");
+        return;
+      }
+      setRepaintFor({ song: liked, genId: currentGen.id });
+      return;
+    }
+    if (kind === "lego") {
+      if (!liked.audioUrl) {
+        showToast("이 곡에는 오디오가 없어 악기 변경이 불가합니다.");
+        return;
+      }
+      setLegoFor({ song: liked, genId: currentGen.id });
+      return;
+    }
     const newPrompt = kind === "similar"
       ? `${liked.prompt} (비슷한 분위기로)`
       : `${liked.prompt} (다른 스타일로)`;
@@ -235,6 +258,77 @@ export function App() {
       parentSongId: liked.id,
       variationType: kind,
     });
+  }
+
+  async function handleRepaintSubmit(startSec: number, endSec: number, caption: string) {
+    if (!repaintFor) return;
+    const { song, genId } = repaintFor;
+    setModalLoading(true);
+    try {
+      const backendSongs = await apiRepaint({
+        sourceAudioUrl: song.audioUrl!,
+        startSec,
+        endSec,
+        caption: caption || undefined,
+        parentSongId: song.id,
+      });
+      const newGen = makeGeneration({
+        prompt: song.prompt,
+        parentGenId: genId,
+        parentSongId: song.id,
+        variationType: "repaint",
+      });
+      newGen.songs = newGen.songs.map((s, idx) => ({
+        ...s,
+        audioUrl: backendSongs[idx]?.audioUrl,
+      }));
+      newGen.daysAgo = 0;
+      setGenerations((gs) => [newGen, ...gs]);
+      setCurrentGenId(newGen.id);
+      setStage("results");
+      setPlayingId(newGen.songs[0].id);
+      setProgress(0);
+      setRepaintFor(null);
+    } catch (e) {
+      showToast(`부분 수정 실패: ${e instanceof Error ? e.message : "백엔드를 확인하세요"}`);
+    } finally {
+      setModalLoading(false);
+    }
+  }
+
+  async function handleLegoSubmit(instruments: string[], caption: string) {
+    if (!legoFor) return;
+    const { song, genId } = legoFor;
+    setModalLoading(true);
+    try {
+      const backendSongs = await apiLego({
+        sourceAudioUrl: song.audioUrl!,
+        instruments,
+        caption: caption || undefined,
+        parentSongId: song.id,
+      });
+      const newGen = makeGeneration({
+        prompt: song.prompt,
+        parentGenId: genId,
+        parentSongId: song.id,
+        variationType: "lego",
+      });
+      newGen.songs = newGen.songs.map((s, idx) => ({
+        ...s,
+        audioUrl: backendSongs[idx]?.audioUrl,
+      }));
+      newGen.daysAgo = 0;
+      setGenerations((gs) => [newGen, ...gs]);
+      setCurrentGenId(newGen.id);
+      setStage("results");
+      setPlayingId(newGen.songs[0].id);
+      setProgress(0);
+      setLegoFor(null);
+    } catch (e) {
+      showToast(`악기 변경 실패: ${e instanceof Error ? e.message : "백엔드를 확인하세요"}`);
+    } finally {
+      setModalLoading(false);
+    }
   }
 
   function handleJumpToGen(genId: string) {
@@ -335,6 +429,24 @@ export function App() {
       />
 
       <Toast message={toast} />
+
+      {repaintFor && (
+        <RepaintModal
+          song={repaintFor.song}
+          onClose={() => !modalLoading && setRepaintFor(null)}
+          onSubmit={handleRepaintSubmit}
+          loading={modalLoading}
+        />
+      )}
+
+      {legoFor && (
+        <LegoModal
+          song={legoFor.song}
+          onClose={() => !modalLoading && setLegoFor(null)}
+          onSubmit={handleLegoSubmit}
+          loading={modalLoading}
+        />
+      )}
     </div>
   );
 }

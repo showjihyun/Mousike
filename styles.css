@@ -1236,3 +1236,147 @@ input, textarea {
   }
   .lr-prompt, .lr-date { display: none; }
 }
+
+/* ============================================================
+   Modals (Repaint + Lego)
+   ============================================================ */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  z-index: 60;
+  padding: 16px;
+}
+
+.modal-card {
+  background: white;
+  border-radius: var(--radius-large);
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+}
+
+.modal-header {
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.modal-title {
+  font-size: 16px;
+  font-weight: var(--fw-bold);
+  color: var(--fg);
+}
+
+.modal-sub {
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.modal-body {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modal-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.modal-label {
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+  color: var(--fg-secondary);
+}
+
+.modal-input {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-standard);
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--fg);
+  background: var(--bg-alt);
+  transition: border-color 120ms;
+  width: 100%;
+  box-sizing: border-box;
+}
+.modal-input:focus {
+  outline: none;
+  border-color: var(--mou-ink);
+}
+.modal-input:disabled { opacity: 0.5; }
+
+.modal-footer {
+  padding: 12px 20px 18px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.modal-btn-cancel {
+  padding: 8px 16px;
+  border-radius: var(--radius-standard);
+  font-size: 13px;
+  font-weight: var(--fw-medium);
+  color: var(--fg-secondary);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  transition: background 120ms;
+}
+.modal-btn-cancel:hover:not(:disabled) { background: var(--border); }
+.modal-btn-cancel:disabled { opacity: 0.5; }
+
+.modal-btn-submit {
+  padding: 8px 20px;
+  border-radius: var(--radius-standard);
+  font-size: 13px;
+  font-weight: var(--fw-semibold);
+  color: white;
+  background: var(--mou-ink);
+  transition: opacity 120ms;
+}
+.modal-btn-submit:hover:not(:disabled) { opacity: 0.85; }
+.modal-btn-submit:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Lego instrument checkbox grid */
+.lego-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.lego-chip {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-standard);
+  font-size: 13px;
+  font-weight: var(--fw-medium);
+  color: var(--fg-secondary);
+  background: var(--bg-alt);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 120ms, background 120ms, color 120ms;
+  user-select: none;
+}
+.lego-chip:hover { border-color: var(--mou-ink); color: var(--fg); }
+.lego-chip.selected {
+  border-color: var(--mou-ink);
+  background: var(--mou-ink);
+  color: white;
+}

@@ -88,10 +88,8 @@ interface GenerateResultsOptions {
 
 export function generateResults(prompt: string, options: GenerateResultsOptions = {}): Song[] {
   const seed = hashSeed(prompt || "default") + (options.salt || 0);
-  const stylesPicked: StyleDef[] = [];
-  for (let i = 0; i < 4; i++) {
-    stylesPicked.push(STYLE_BANK[(seed + i * 7) % STYLE_BANK.length]);
-  }
+  // Backend currently returns 1 song per request; placeholder count matches.
+  const stylesPicked: StyleDef[] = [STYLE_BANK[seed % STYLE_BANK.length]];
   const promptShort = (prompt || "음악").slice(0, 14);
   const genId = options.genId || `gen-${++_genCounter}-${seed}`;
   const durations = [165, 180, 142, 198];
@@ -126,7 +124,7 @@ export function makeGeneration({
   variationType = null,
 }: MakeGenerationArgs): Generation {
   const genId = id || `gen-${++_genCounter}-${hashSeed(prompt + Math.random())}`;
-  const salt = variationType === "restyle" ? 7 : variationType === "similar" ? 3 : 0;
+  const salt = variationType === "restyle" ? 7 : variationType === "similar" ? 3 : variationType === "repaint" ? 11 : variationType === "lego" ? 5 : 0;
   const songs = generateResults(prompt, { genId, salt });
   return {
     id: genId,
@@ -147,7 +145,6 @@ export const SEED_GENERATIONS: Generation[] = (() => {
   const g1 = makeGeneration({ prompt: "잔잔한 카페 음악, 어쿠스틱 기타" });
   g1.daysAgo = 3;
   g1.songs[0].liked = true;
-  g1.songs[2].liked = true;
   out.push(g1);
 
   const g2 = makeGeneration({
@@ -157,7 +154,7 @@ export const SEED_GENERATIONS: Generation[] = (() => {
     variationType: "restyle",
   });
   g2.daysAgo = 2;
-  g2.songs[1].liked = true;
+  g2.songs[0].liked = true;
   out.push(g2);
 
   const g3 = makeGeneration({ prompt: "신나는 유튜브 인트로 30초" });
@@ -189,4 +186,6 @@ export function daysAgoLabel(d: number): string {
 export const VARIATION_LABELS: Record<VariationType, string> = {
   similar: "비슷한 분위기",
   restyle: "다른 스타일",
+  repaint: "부분 수정",
+  lego: "악기 변경",
 };
