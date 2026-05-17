@@ -221,8 +221,31 @@ export function App() {
     );
   }
 
+  async function downloadSong(song: Song) {
+    if (!song.audioUrl) {
+      showToast("이 곡에는 다운로드할 오디오가 없어요.");
+      return;
+    }
+    try {
+      const res = await fetch(song.audioUrl);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${song.title}.mp3`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast(`"${song.title}" 다운로드를 시작했어요.`);
+    } catch (e) {
+      showToast(`다운로드 실패: ${e instanceof Error ? e.message : "다시 시도하세요"}`);
+    }
+  }
+
   function handleAction(action: SongAction, song: Song) {
-    if (action === "download") showToast(`"${song.title}" 다운로드를 시작합니다.`);
+    if (action === "download") downloadSong(song);
     else if (action === "certificate") showToast("저작권 안전성 인증서 PDF를 발급했어요.");
     else if (action === "share") showToast("공유 링크가 클립보드에 복사됐어요.");
   }
