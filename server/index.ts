@@ -286,7 +286,7 @@ app.post("/api/repaint", async (req, res) => {
       true,               // 8  Random Seed
       "-1",               // 9  Seed
       null,               // 10 Reference Audio
-      -1,                 // 11 Audio Duration
+      SAMPLE_DURATION_SEC, // 11 Audio Duration (cap to free-tier sample length)
       BATCH_SIZE,         // 12 Batch Size
       { path: gradioPath, meta: { _type: "gradio.FileData" }, orig_name: basename(localPath), mime_type: "audio/mpeg" }, // 13 Source Audio
       "",                 // 14 LM Codes Hints
@@ -396,7 +396,7 @@ app.post("/api/lego", async (req, res) => {
       true,               // 8  Random Seed
       "-1",               // 9  Seed
       null,               // 10 Reference Audio
-      -1,                 // 11 Audio Duration
+      SAMPLE_DURATION_SEC, // 11 Audio Duration (cap to free-tier sample length)
       BATCH_SIZE,         // 12 Batch Size
       { path: gradioPath, meta: { _type: "gradio.FileData" }, orig_name: basename(localPath), mime_type: "audio/mpeg" }, // 13 Source Audio
       "",                 // 14 LM Codes Hints
