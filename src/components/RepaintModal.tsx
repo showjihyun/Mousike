@@ -9,8 +9,8 @@ interface RepaintModalProps {
 }
 
 export function RepaintModal({ song, onClose, onSubmit, loading }: RepaintModalProps) {
-  const [startSec, setStartSec] = useState(30);
-  const [endSec, setEndSec] = useState(60);
+  const [startSec, setStartSec] = useState(Math.floor(song.durationSec / 3));
+  const [endSec, setEndSec] = useState(Math.floor((song.durationSec * 2) / 3));
   const [caption, setCaption] = useState("");
 
   function handleSubmit() {
