@@ -262,6 +262,11 @@ export function App() {
 
   async function handleRepaintSubmit(startSec: number, endSec: number, caption: string) {
     if (!repaintFor) return;
+    if (credits <= 0) {
+      showToast("오늘 무료 생성 한도를 모두 사용했어요. Pro로 업그레이드하세요!");
+      setRepaintFor(null);
+      return;
+    }
     const { song, genId } = repaintFor;
     setModalLoading(true);
     try {
@@ -286,6 +291,7 @@ export function App() {
       setGenerations((gs) => [newGen, ...gs]);
       setCurrentGenId(newGen.id);
       setStage("results");
+      setCredits((c) => Math.max(0, c - 1));
       setPlayingId(newGen.songs[0].id);
       setProgress(0);
       setRepaintFor(null);
@@ -298,6 +304,11 @@ export function App() {
 
   async function handleLegoSubmit(instruments: string[], caption: string) {
     if (!legoFor) return;
+    if (credits <= 0) {
+      showToast("오늘 무료 생성 한도를 모두 사용했어요. Pro로 업그레이드하세요!");
+      setLegoFor(null);
+      return;
+    }
     const { song, genId } = legoFor;
     setModalLoading(true);
     try {
@@ -321,6 +332,7 @@ export function App() {
       setGenerations((gs) => [newGen, ...gs]);
       setCurrentGenId(newGen.id);
       setStage("results");
+      setCredits((c) => Math.max(0, c - 1));
       setPlayingId(newGen.songs[0].id);
       setProgress(0);
       setLegoFor(null);
