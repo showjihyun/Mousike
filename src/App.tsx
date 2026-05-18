@@ -36,6 +36,21 @@ import type {
   VariationType,
 } from "./types";
 
+// Three tries with 500ms / 1000ms backoff. Returns true if any attempt
+// succeeds, false after the last attempt fails. Callers decide whether the
+// failure is worth surfacing.
+async function withRetry(fn: () => Promise<unknown>): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await fn();
+      return true;
+    } catch {
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+    }
+  }
+  return false;
+}
+
 const LOADING_MESSAGES = [
   "한국어를 영문 프롬프트로 변환하는 중…",
   "분위기를 잡는 중…",
@@ -251,8 +266,10 @@ export function App() {
       setPlayingId(newGen.songs[0].id);
       setProgress(0);
       if (user) {
-        postGeneration(newGen).catch((err) => console.warn("postGeneration failed", err));
-        patchCredits(newCredits).catch((err) => console.warn("patchCredits failed", err));
+        withRetry(() => postGeneration(newGen)).then((ok) => {
+          if (!ok) showToast(`"${newGen.songs[0].title}" 저장 실패 — 새로고침 시 사라질 수 있어요`);
+        });
+        withRetry(() => patchCredits(newCredits));
       }
     } catch (e) {
       showToast(`생성 실패: ${e instanceof Error ? e.message : "백엔드를 확인하세요"}`);
@@ -288,9 +305,7 @@ export function App() {
         songs: g.songs.map((s) => (s.id === id ? { ...s, liked: newLiked } : s)),
       })),
     );
-    if (user) {
-      patchSongLiked(id, newLiked).catch((err) => console.warn("patchSongLiked failed", err));
-    }
+    if (user) withRetry(() => patchSongLiked(id, newLiked));
   }
 
   async function downloadSong(song: Song) {
@@ -410,8 +425,10 @@ export function App() {
       setProgress(0);
       setRepaintFor(null);
       if (user) {
-        postGeneration(newGen).catch((err) => console.warn("postGeneration failed", err));
-        patchCredits(newCredits).catch((err) => console.warn("patchCredits failed", err));
+        withRetry(() => postGeneration(newGen)).then((ok) => {
+          if (!ok) showToast(`"${newGen.songs[0].title}" 저장 실패 — 새로고침 시 사라질 수 있어요`);
+        });
+        withRetry(() => patchCredits(newCredits));
       }
     } catch (e) {
       showToast(`부분 수정 실패: ${e instanceof Error ? e.message : "백엔드를 확인하세요"}`);
@@ -456,8 +473,10 @@ export function App() {
       setProgress(0);
       setLegoFor(null);
       if (user) {
-        postGeneration(newGen).catch((err) => console.warn("postGeneration failed", err));
-        patchCredits(newCredits).catch((err) => console.warn("patchCredits failed", err));
+        withRetry(() => postGeneration(newGen)).then((ok) => {
+          if (!ok) showToast(`"${newGen.songs[0].title}" 저장 실패 — 새로고침 시 사라질 수 있어요`);
+        });
+        withRetry(() => patchCredits(newCredits));
       }
     } catch (e) {
       showToast(`악기 변경 실패: ${e instanceof Error ? e.message : "백엔드를 확인하세요"}`);
