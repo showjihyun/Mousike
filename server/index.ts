@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { execFile } from "child_process";
@@ -5,6 +6,7 @@ import { promisify } from "util";
 import { mkdirSync } from "fs";
 import { join, dirname, basename } from "path";
 import { fileURLToPath } from "url";
+import { mountAuth } from "./auth.js";
 
 const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -167,9 +169,17 @@ async function copyAudioToCache(containerPaths: string[]): Promise<string[]> {
 }
 
 const app = express();
-app.use(cors({ origin: "http://localhost:5173" }));
+app.use(cors({ origin: "http://localhost:5173", credentials: true }));
 app.use(express.json());
 app.use("/audio", express.static(AUDIO_CACHE_DIR));
+
+try {
+  mountAuth(app);
+} catch (err) {
+  // Missing env vars: keep the server running so the free-tier flow still works,
+  // but /auth/* will 404 until the operator sets GOOGLE_*, SESSION_SECRET, SUPABASE_*.
+  console.warn("[auth] disabled —", err instanceof Error ? err.message : err);
+}
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
