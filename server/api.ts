@@ -1,6 +1,7 @@
 // Per-user data endpoints. All require an authenticated session.
 // Anonymous flows (generate, audio playback) are NOT routed through here.
 import type { Express, Request } from "express";
+import { existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { getSupabase } from "./db.js";
@@ -8,6 +9,7 @@ import { requireAuth } from "./auth.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AUDIO_CACHE_DIR = join(__dirname, "audio-cache");
+const AUDIO_SECURE_DIR = join(__dirname, "audio-secure");
 
 interface SongPayload {
   id: string;
@@ -249,13 +251,25 @@ export function mountApi(app: Express): void {
     }
   });
 
-  // Auth-gated mirror of /audio for downloads. Free users can still stream
-  // via the public /audio path; only this route sets Content-Disposition.
+  // Auth-gated mirror of /audio for downloads. Paid users get the un-
+  // watermarked clean file from audio-secure; free users get the same
+  // watermarked file they already hear from /audio. Free users can still
+  // stream via the public /audio path; only this route sets Content-Disposition.
   app.get("/api/download/:filename", requireAuth, (req, res) => {
     const filename = String(req.params.filename ?? "");
     if (!/^[A-Za-z0-9._-]+\.mp3$/.test(filename)) {
       res.status(400).json({ error: "invalid filename" });
       return;
+    }
+    const tier = (req.user as { tier?: string } | undefined)?.tier;
+    const isPaid = tier === "starter" || tier === "pro";
+    if (isPaid) {
+      const cleanFilename = filename.replace(/-wm\.mp3$/, ".mp3");
+      const cleanPath = join(AUDIO_SECURE_DIR, cleanFilename);
+      if (existsSync(cleanPath)) {
+        res.download(cleanPath, cleanFilename);
+        return;
+      }
     }
     res.download(join(AUDIO_CACHE_DIR, filename), filename);
   });

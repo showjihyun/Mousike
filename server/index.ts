@@ -3,16 +3,19 @@ import express from "express";
 import cors from "cors";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { mkdirSync } from "fs";
+import { mkdirSync, existsSync } from "fs";
 import { join, dirname, basename } from "path";
 import { fileURLToPath } from "url";
 import { mountAuth, requireAuth } from "./auth.js";
 import { mountApi } from "./api.js";
+import { mixWatermark } from "./watermark.js";
 
 const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AUDIO_CACHE_DIR = join(__dirname, "audio-cache");
+const AUDIO_SECURE_DIR = join(__dirname, "audio-secure");
 mkdirSync(AUDIO_CACHE_DIR, { recursive: true });
+mkdirSync(AUDIO_SECURE_DIR, { recursive: true });
 
 const OLLAMA_URL = "http://localhost:11434/api/generate";
 const ACE_STEP_URL = "http://localhost:7860/gradio_api/call/generation_wrapper";
@@ -166,15 +169,21 @@ async function pollSse(eventId: string): Promise<string[]> {
   return mp3Paths;
 }
 
-async function copyAudioToCache(containerPaths: string[]): Promise<string[]> {
-  const localPaths: string[] = [];
+// Copies the model output out of the ace-step container into audio-secure as
+// the clean file, then writes a watermarked sibling into audio-cache. Returns
+// the watermarked filename (X-wm.mp3); the clean source (X.mp3) lives only in
+// audio-secure and is reached via /api/download for paid users.
+async function processAudio(containerPaths: string[]): Promise<string[]> {
+  const watermarkedNames: string[] = [];
   for (const containerPath of containerPaths) {
-    const filename = `${Date.now()}-${Math.random().toString(36).slice(2)}.mp3`;
-    const localPath = join(AUDIO_CACHE_DIR, filename);
-    await execFileAsync("docker", ["cp", `ace-step:${containerPath}`, localPath]);
-    localPaths.push(filename);
+    const stem = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const cleanPath = join(AUDIO_SECURE_DIR, `${stem}.mp3`);
+    const watermarkedPath = join(AUDIO_CACHE_DIR, `${stem}-wm.mp3`);
+    await execFileAsync("docker", ["cp", `ace-step:${containerPath}`, cleanPath]);
+    await mixWatermark(cleanPath, watermarkedPath);
+    watermarkedNames.push(`${stem}-wm.mp3`);
   }
-  return localPaths;
+  return watermarkedNames;
 }
 
 const app = express();
@@ -220,7 +229,7 @@ app.post("/api/generate", async (req, res) => {
     console.log(`[generate] caption: "${caption}"`);
 
     const { paths } = await generateMusic(caption, durationForUser(req.user));
-    const filenames = await copyAudioToCache(paths);
+    const filenames = await processAudio(paths);
 
     const songs = filenames.map((filename, i) => ({
       id: `${Date.now()}-${i}`,
@@ -262,10 +271,16 @@ async function uploadAudioToGradio(localPath: string): Promise<string> {
   return paths[0];
 }
 
+// For variation endpoints (repaint/lego) we feed ACE-Step the clean file —
+// never the watermarked one — so the voice doesn't get baked into derivatives.
+// Falls back to whatever's in audio-cache for pre-watermark songs (which were
+// already clean) so old songs in users' libraries still work.
 function resolveAudioUrlToLocalPath(audioUrl: string): string {
-  // e.g. http://localhost:8787/audio/1234-abcd.mp3 → AUDIO_CACHE_DIR/1234-abcd.mp3
   const filename = audioUrl.split("/audio/")[1];
   if (!filename) throw new Error(`Cannot resolve audio URL: ${audioUrl}`);
+  const cleanFilename = filename.replace(/-wm\.mp3$/, ".mp3");
+  const securePath = join(AUDIO_SECURE_DIR, cleanFilename);
+  if (existsSync(securePath)) return securePath;
   return join(AUDIO_CACHE_DIR, filename);
 }
 
@@ -358,7 +373,7 @@ app.post("/api/repaint", requireAuth, async (req, res) => {
     const { event_id } = (await submitRes.json()) as { event_id: string };
 
     const paths = await pollSse(event_id);
-    const filenames = await copyAudioToCache(paths);
+    const filenames = await processAudio(paths);
 
     const songs = filenames.map((filename, i) => ({
       id: `${Date.now()}-${i}`,
@@ -469,7 +484,7 @@ app.post("/api/lego", requireAuth, async (req, res) => {
     const { event_id } = (await submitRes.json()) as { event_id: string };
 
     const paths = await pollSse(event_id);
-    const filenames = await copyAudioToCache(paths);
+    const filenames = await processAudio(paths);
 
     const songs = filenames.map((filename, i) => ({
       id: `${Date.now()}-${i}`,

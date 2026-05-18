@@ -12,6 +12,8 @@ dist
 server/node_modules
 server/audio-cache/*
 !server/audio-cache/.gitkeep
+server/audio-secure/*
+!server/audio-secure/.gitkeep
 
 # TypeScript incremental build cache
 *.tsbuildinfo
