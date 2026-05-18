@@ -3,7 +3,17 @@
 // Home (Spark Mode) with lineage tracking + Library (with tree view)
 // ============================================================
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { generate as apiGenerate, repaint as apiRepaint, lego as apiLego, type Lang } from "./api";
+import {
+  generate as apiGenerate,
+  repaint as apiRepaint,
+  lego as apiLego,
+  fetchGenerations,
+  postGeneration,
+  fetchCredits,
+  patchCredits,
+  patchSongLiked,
+  type Lang,
+} from "./api";
 import { type AuthUser, fetchCurrentUser, goToLogin, logout as apiLogout } from "./auth";
 import { LegoModal } from "./components/LegoModal";
 import { LoginModal } from "./components/LoginModal";
@@ -77,6 +87,43 @@ export function App() {
       .catch(() => setUser(null));
   }, []);
 
+  // On login: load library + credits from Supabase. If the server library is
+  // empty but localStorage has data, upload the local copy first so the user
+  // keeps what they had. Logout restoration is done synchronously in the
+  // logout handler so the save effect can't overwrite localStorage with the
+  // logged-in snapshot mid-transition.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [serverGens, serverCredits] = await Promise.all([
+          fetchGenerations(),
+          fetchCredits(),
+        ]);
+        if (cancelled) return;
+        const localGens = loadGenerations();
+        const localCredits = loadCredits();
+        const shouldMigrate = serverGens.length === 0 && localGens && localGens.length > 0;
+        if (shouldMigrate && localGens) {
+          await Promise.allSettled(localGens.map((g) => postGeneration(g)));
+          if (localCredits != null) await patchCredits(localCredits).catch(() => {});
+          if (cancelled) return;
+          setGenerations(localGens);
+          setCredits(localCredits ?? 0);
+          showToast("라이브러리를 계정으로 옮겼어요");
+        } else {
+          setGenerations(serverGens.length > 0 ? serverGens : SEED_GENERATIONS);
+          setCredits(serverCredits);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        showToast(`라이브러리 동기화 실패: ${e instanceof Error ? e.message : ""}`);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user]);
+
   const findSong = useCallback(
     (id: string): Song | null => {
       for (const g of generations) {
@@ -93,9 +140,11 @@ export function App() {
     [generations],
   );
 
-  // Persist library + credits whenever they change.
-  useEffect(() => { saveGenerations(generations); }, [generations]);
-  useEffect(() => { saveCredits(credits); }, [credits]);
+  // Persist library + credits — but only while anonymous. When logged in,
+  // Supabase is the source of truth (and localStorage stays frozen at the
+  // pre-login state so logout restores the anonymous view).
+  useEffect(() => { if (!user) saveGenerations(generations); }, [generations, user]);
+  useEffect(() => { if (!user) saveCredits(credits); }, [credits, user]);
 
   // Drive audio element from playingId; report progress via audio events
   useEffect(() => {
@@ -197,9 +246,14 @@ export function App() {
       setGenerations((gs) => [newGen, ...gs]);
       setCurrentGenId(newGen.id);
       setStage("results");
-      setCredits((c) => Math.max(0, c - 1));
+      const newCredits = Math.max(0, credits - 1);
+      setCredits(newCredits);
       setPlayingId(newGen.songs[0].id);
       setProgress(0);
+      if (user) {
+        postGeneration(newGen).catch((err) => console.warn("postGeneration failed", err));
+        patchCredits(newCredits).catch((err) => console.warn("patchCredits failed", err));
+      }
     } catch (e) {
       showToast(`생성 실패: ${e instanceof Error ? e.message : "백엔드를 확인하세요"}`);
       setStage("idle");
@@ -225,12 +279,18 @@ export function App() {
   }
 
   function handleLike(id: string) {
+    const song = findSong(id);
+    if (!song) return;
+    const newLiked = !song.liked;
     setGenerations((gs) =>
       gs.map((g) => ({
         ...g,
-        songs: g.songs.map((s) => (s.id === id ? { ...s, liked: !s.liked } : s)),
+        songs: g.songs.map((s) => (s.id === id ? { ...s, liked: newLiked } : s)),
       })),
     );
+    if (user) {
+      patchSongLiked(id, newLiked).catch((err) => console.warn("patchSongLiked failed", err));
+    }
   }
 
   async function downloadSong(song: Song) {
@@ -344,10 +404,15 @@ export function App() {
       setGenerations((gs) => [newGen, ...gs]);
       setCurrentGenId(newGen.id);
       setStage("results");
-      setCredits((c) => Math.max(0, c - 1));
+      const newCredits = Math.max(0, credits - 1);
+      setCredits(newCredits);
       setPlayingId(newGen.songs[0].id);
       setProgress(0);
       setRepaintFor(null);
+      if (user) {
+        postGeneration(newGen).catch((err) => console.warn("postGeneration failed", err));
+        patchCredits(newCredits).catch((err) => console.warn("patchCredits failed", err));
+      }
     } catch (e) {
       showToast(`부분 수정 실패: ${e instanceof Error ? e.message : "백엔드를 확인하세요"}`);
     } finally {
@@ -385,10 +450,15 @@ export function App() {
       setGenerations((gs) => [newGen, ...gs]);
       setCurrentGenId(newGen.id);
       setStage("results");
-      setCredits((c) => Math.max(0, c - 1));
+      const newCredits = Math.max(0, credits - 1);
+      setCredits(newCredits);
       setPlayingId(newGen.songs[0].id);
       setProgress(0);
       setLegoFor(null);
+      if (user) {
+        postGeneration(newGen).catch((err) => console.warn("postGeneration failed", err));
+        patchCredits(newCredits).catch((err) => console.warn("patchCredits failed", err));
+      }
     } catch (e) {
       showToast(`악기 변경 실패: ${e instanceof Error ? e.message : "백엔드를 확인하세요"}`);
     } finally {
@@ -437,6 +507,8 @@ export function App() {
         onLogin={goToLogin}
         onLogout={async () => {
           await apiLogout();
+          setGenerations(loadGenerations() ?? SEED_GENERATIONS);
+          setCredits(loadCredits() ?? 3);
           setUser(null);
         }}
       />
