@@ -18,8 +18,16 @@ const OLLAMA_URL = "http://localhost:11434/api/generate";
 const ACE_STEP_URL = "http://localhost:7860/gradio_api/call/generation_wrapper";
 const PORT = 8787;
 const BATCH_SIZE = 1;
-// Sample length for free tier (seconds). Paid users will later be allowed 30s+.
-const SAMPLE_DURATION_SEC = 30;
+
+const FREE_DURATION_SEC = 30;
+const PAID_DURATION_SEC = 90;
+
+function durationForUser(user: Express.User | undefined): number {
+  if (!user) return FREE_DURATION_SEC;
+  return user.tier === "starter" || user.tier === "pro"
+    ? PAID_DURATION_SEC
+    : FREE_DURATION_SEC;
+}
 
 async function translateKoreanToEnglish(prompt: string): Promise<string> {
   const res = await fetch(OLLAMA_URL, {
@@ -39,7 +47,7 @@ async function translateKoreanToEnglish(prompt: string): Promise<string> {
   return data.response.trim();
 }
 
-async function generateMusic(caption: string): Promise<{ paths: string[] }> {
+async function generateMusic(caption: string, durationSec: number): Promise<{ paths: string[] }> {
   // Empirically validated: the handler needs 50 inputs despite the API schema showing 45.
   // The 5 hidden gr.State components (at positions 36, 46-49) are not exposed in /gradio_api/info
   // but the handler requires them. Pass null for all hidden States.
@@ -56,7 +64,7 @@ async function generateMusic(caption: string): Promise<{ paths: string[] }> {
     true,                   // 8  Random Seed
     "-1",                   // 9  Seed
     null,                   // 10 Reference Audio
-    SAMPLE_DURATION_SEC,    // 11 Audio Duration (free-tier sample length)
+    durationSec,            // 11 Audio Duration (per-user tier)
     BATCH_SIZE,             // 12 Batch Size
     null,                   // 13 Source Audio
     "",                     // 14 LM Codes Hints
@@ -211,7 +219,7 @@ app.post("/api/generate", async (req, res) => {
 
     console.log(`[generate] caption: "${caption}"`);
 
-    const { paths } = await generateMusic(caption);
+    const { paths } = await generateMusic(caption, durationForUser(req.user));
     const filenames = await copyAudioToCache(paths);
 
     const songs = filenames.map((filename, i) => ({
@@ -283,6 +291,7 @@ app.post("/api/repaint", requireAuth, async (req, res) => {
     const localPath = resolveAudioUrlToLocalPath(sourceAudioUrl);
     const gradioPath = await uploadAudioToGradio(localPath);
     const captionStr = typeof caption === "string" ? caption.trim() : "";
+    const durationSec = durationForUser(req.user);
 
     console.log(`[repaint] ${startSec}s–${endSec}s caption="${captionStr}" src=${gradioPath}`);
 
@@ -299,7 +308,7 @@ app.post("/api/repaint", requireAuth, async (req, res) => {
       true,               // 8  Random Seed
       "-1",               // 9  Seed
       null,               // 10 Reference Audio
-      SAMPLE_DURATION_SEC, // 11 Audio Duration (cap to free-tier sample length)
+      durationSec,        // 11 Audio Duration (per-user tier)
       BATCH_SIZE,         // 12 Batch Size
       { path: gradioPath, meta: { _type: "gradio.FileData" }, orig_name: basename(localPath), mime_type: "audio/mpeg" }, // 13 Source Audio
       "",                 // 14 LM Codes Hints
@@ -386,6 +395,7 @@ app.post("/api/lego", requireAuth, async (req, res) => {
   try {
     const localPath = resolveAudioUrlToLocalPath(sourceAudioUrl);
     const gradioPath = await uploadAudioToGradio(localPath);
+    const durationSec = durationForUser(req.user);
 
     const englishInstruments = (instruments as string[]).map(
       (ko) => KO_TO_EN_INSTRUMENTS[ko] ?? ko,
@@ -409,7 +419,7 @@ app.post("/api/lego", requireAuth, async (req, res) => {
       true,               // 8  Random Seed
       "-1",               // 9  Seed
       null,               // 10 Reference Audio
-      SAMPLE_DURATION_SEC, // 11 Audio Duration (cap to free-tier sample length)
+      durationSec,        // 11 Audio Duration (per-user tier)
       BATCH_SIZE,         // 12 Batch Size
       { path: gradioPath, meta: { _type: "gradio.FileData" }, orig_name: basename(localPath), mime_type: "audio/mpeg" }, // 13 Source Audio
       "",                 // 14 LM Codes Hints

@@ -495,6 +495,7 @@ export function App() {
   }
 
   const playingSong = playingId ? findSong(playingId) : null;
+  const songLengthSec = user?.tier === "starter" || user?.tier === "pro" ? 90 : 30;
 
   return (
     <div className="app" data-screen-label={page === "home" ? "01 Home" : "02 Library"}>
@@ -539,6 +540,7 @@ export function App() {
               onVariation={handleVariation}
               credits={credits}
               findSong={findSong}
+              songLengthSec={songLengthSec}
             />
           )}
           {page === "library" && (

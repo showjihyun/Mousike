@@ -31,6 +31,7 @@ interface HomePageProps {
   onVariation: (kind: VariationType) => void;
   credits: number;
   findSong: (id: string) => Song | null;
+  songLengthSec: number;
 }
 
 export function HomePage(props: HomePageProps) {
@@ -38,6 +39,7 @@ export function HomePage(props: HomePageProps) {
     prompt, setPrompt, lang, setLang, onSubmit, onPresetClick, onStartFresh,
     stage, loadingMsg, pendingParent, currentGen, lineageChain, onJumpGen,
     playingId, progress, onPlay, onPause, onLike, onAction, onVariation,
+    songLengthSec,
   } = props;
 
   const likedInCurrent = currentGen ? currentGen.songs.filter((s) => s.liked).length : 0;
@@ -81,7 +83,7 @@ export function HomePage(props: HomePageProps) {
             <span className="accent">음악 놀이터</span>
           </h1>
           <p className="hero-sub">
-            "잔잔한 카페 음악" 한 줄이면 30초 샘플 한 곡이 나옵니다.<br />
+            "잔잔한 카페 음악" 한 줄이면 {songLengthSec}초 샘플 한 곡이 나옵니다.<br />
             마음에 드는 곡은 변형하고, 부분만 다시 만들고, 악기를 더해보세요.
           </p>
         </div>
@@ -128,8 +130,8 @@ export function HomePage(props: HomePageProps) {
         <div className="composer-meta">
           <div className="left">
             <span><kbd>Enter</kbd> 생성</span>
-            <span>30초 샘플 1곡</span>
-            <span>약 30초 소요</span>
+            <span>{songLengthSec}초 샘플 1곡</span>
+            <span>약 {songLengthSec}초 소요</span>
           </div>
           <span>{prompt.length}/200</span>
         </div>

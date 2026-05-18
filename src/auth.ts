@@ -1,10 +1,13 @@
 const BACKEND_URL = "http://localhost:8787";
 
+export type Tier = "free" | "starter" | "pro";
+
 export interface AuthUser {
   id: string;
   email: string;
   name: string | null;
   picture: string | null;
+  tier: Tier;
 }
 
 export async function fetchCurrentUser(): Promise<AuthUser | null> {

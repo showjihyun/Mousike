@@ -7,11 +7,14 @@ import { Strategy as GoogleStrategy, type Profile } from "passport-google-oauth2
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabase } from "./db.js";
 
+export type Tier = "free" | "starter" | "pro";
+
 export interface AuthUser {
   id: string;
   email: string;
   name: string | null;
   picture: string | null;
+  tier: Tier;
 }
 
 // Strategy needs a string callback URL — built from env so dev/prod can differ.
@@ -40,7 +43,7 @@ async function upsertUserFromGoogle(
       },
       { onConflict: "google_id" },
     )
-    .select("id, email, name, picture")
+    .select("id, email, name, picture, tier")
     .single();
   if (error) throw error;
   return data as AuthUser;
@@ -96,7 +99,7 @@ export function mountAuth(app: Express): void {
     try {
       const { data, error } = await supabase
         .from("users")
-        .select("id, email, name, picture")
+        .select("id, email, name, picture, tier")
         .eq("id", id)
         .single();
       if (error) throw error;
