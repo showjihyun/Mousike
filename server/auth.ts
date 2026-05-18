@@ -59,6 +59,13 @@ export function mountAuth(app: Express): void {
 
   const supabase = getSupabase();
 
+  const isProd = process.env.NODE_ENV === "production";
+  if (isProd) {
+    // Required for `secure` cookies to round-trip behind a TLS-terminating proxy
+    // (Vercel, Fly, Render, etc.) — otherwise req.protocol stays 'http' and the
+    // browser never sends the session cookie back.
+    app.set("trust proxy", 1);
+  }
   app.use(
     session({
       secret: sessionSecret,
@@ -67,7 +74,7 @@ export function mountAuth(app: Express): void {
       cookie: {
         httpOnly: true,
         sameSite: "lax",
-        secure: false,
+        secure: isProd,
         maxAge: 1000 * 60 * 60 * 24 * 30,
       },
     }),
