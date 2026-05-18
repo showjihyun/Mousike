@@ -1,3 +1,4 @@
+import type { AuthUser } from "../auth";
 import type { Page } from "../types";
 import { Icon } from "./Icon";
 
@@ -6,9 +7,12 @@ interface TopbarProps {
   onPage: (page: Page) => void;
   credits: number;
   onHome?: () => void;
+  user: AuthUser | null;
+  onLogin: () => void;
+  onLogout: () => void;
 }
 
-export function Topbar({ page, onPage, credits, onHome }: TopbarProps) {
+export function Topbar({ page, onPage, credits, onHome, user, onLogin, onLogout }: TopbarProps) {
   return (
     <div className="topbar">
       <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
@@ -31,7 +35,17 @@ export function Topbar({ page, onPage, credits, onHome }: TopbarProps) {
           <Icon name="sparkles" size={12} />
           오늘 <b>{credits}/3</b>
         </div>
-        <button className="btn-ghost" onClick={() => alert("로그인 화면은 별도 작업으로!")}>로그인</button>
+        {user ? (
+          <>
+            <span className="user-chip" title={user.email}>
+              {user.picture && <img src={user.picture} alt="" className="user-avatar" />}
+              {user.name ?? user.email}
+            </span>
+            <button className="btn-ghost" onClick={onLogout}>로그아웃</button>
+          </>
+        ) : (
+          <button className="btn-ghost" onClick={onLogin}>로그인</button>
+        )}
         <button className="btn-primary" onClick={() => alert("플랜 페이지는 별도 작업으로!")}>업그레이드</button>
       </div>
     </div>

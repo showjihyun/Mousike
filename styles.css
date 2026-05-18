@@ -133,6 +133,22 @@ input, textarea {
   color: var(--fg-secondary);
 }
 .btn-ghost:hover { background: rgba(0,0,0,0.04); color: var(--fg); }
+.user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 4px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-caption);
+  color: var(--fg);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-avatar { width: 20px; height: 20px; border-radius: 50%; }
 
 /* ============================================================
    Main content

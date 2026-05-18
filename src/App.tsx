@@ -4,7 +4,9 @@
 // ============================================================
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generate as apiGenerate, repaint as apiRepaint, lego as apiLego, type Lang } from "./api";
+import { type AuthUser, fetchCurrentUser, goToLogin, logout as apiLogout } from "./auth";
 import { LegoModal } from "./components/LegoModal";
+import { LoginModal } from "./components/LoginModal";
 import { MiniPlayer } from "./components/MiniPlayer";
 import { RepaintModal } from "./components/RepaintModal";
 import type { SongAction } from "./components/SongCard";
@@ -64,6 +66,16 @@ export function App() {
   const [repaintFor, setRepaintFor] = useState<{ song: Song; genId: string } | null>(null);
   const [legoFor, setLegoFor] = useState<{ song: Song; genId: string } | null>(null);
   const [modalLoading, setModalLoading] = useState(false);
+
+  // Auth: null = not loaded yet OR anonymous. Fetched once on mount.
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [loginPromptReason, setLoginPromptReason] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchCurrentUser()
+      .then(setUser)
+      .catch(() => setUser(null));
+  }, []);
 
   const findSong = useCallback(
     (id: string): Song | null => {
@@ -226,8 +238,18 @@ export function App() {
       showToast("이 곡에는 다운로드할 오디오가 없어요.");
       return;
     }
+    if (!user) {
+      setLoginPromptReason("곡을 다운로드하려면 로그인이 필요합니다.");
+      return;
+    }
+    // Swap the public /audio path for the auth-gated /api/download endpoint so
+    // a stale session falls back to 401 instead of silently leaking the file.
+    const filename = song.audioUrl.split("/audio/")[1];
+    const downloadUrl = filename
+      ? song.audioUrl.replace(`/audio/${filename}`, `/api/download/${filename}`)
+      : song.audioUrl;
     try {
-      const res = await fetch(song.audioUrl);
+      const res = await fetch(downloadUrl, { credentials: "include" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -262,12 +284,20 @@ export function App() {
         showToast("이 곡에는 오디오가 없어 부분 수정이 불가합니다.");
         return;
       }
+      if (!user) {
+        setLoginPromptReason("부분 수정 기능은 로그인 후 이용할 수 있어요.");
+        return;
+      }
       setRepaintFor({ song: liked, genId: currentGen.id });
       return;
     }
     if (kind === "lego") {
       if (!liked.audioUrl) {
         showToast("이 곡에는 오디오가 없어 악기 변경이 불가합니다.");
+        return;
+      }
+      if (!user) {
+        setLoginPromptReason("악기 변경 기능은 로그인 후 이용할 수 있어요.");
         return;
       }
       setLegoFor({ song: liked, genId: currentGen.id });
@@ -398,7 +428,18 @@ export function App() {
 
   return (
     <div className="app" data-screen-label={page === "home" ? "01 Home" : "02 Library"}>
-      <Topbar page={page} onPage={setPage} credits={credits} onHome={handleStartFresh} />
+      <Topbar
+        page={page}
+        onPage={setPage}
+        credits={credits}
+        onHome={handleStartFresh}
+        user={user}
+        onLogin={goToLogin}
+        onLogout={async () => {
+          await apiLogout();
+          setUser(null);
+        }}
+      />
 
       <div className="main">
         <div className="main-inner">
@@ -480,6 +521,13 @@ export function App() {
           onClose={() => !modalLoading && setLegoFor(null)}
           onSubmit={handleLegoSubmit}
           loading={modalLoading}
+        />
+      )}
+
+      {loginPromptReason && (
+        <LoginModal
+          reason={loginPromptReason}
+          onClose={() => setLoginPromptReason(null)}
         />
       )}
     </div>

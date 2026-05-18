@@ -17,6 +17,7 @@ export async function generate(prompt: string, lang: Lang): Promise<BackendSong[
   const res = await fetch(`${BACKEND_URL}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ prompt, lang }),
   });
   if (!res.ok) {
@@ -37,6 +38,7 @@ export async function repaint(args: {
   const res = await fetch(`${BACKEND_URL}/api/repaint`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify(args),
   });
   if (!res.ok) {
@@ -56,6 +58,7 @@ export async function lego(args: {
   const res = await fetch(`${BACKEND_URL}/api/lego`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify(args),
   });
   if (!res.ok) {
