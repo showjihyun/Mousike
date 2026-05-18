@@ -9,10 +9,10 @@ import {
   lego as apiLego,
   fetchGenerations,
   postGeneration,
-  fetchCredits,
-  patchCredits,
   patchSongLiked,
+  fetchUsage,
   type Lang,
+  type Usage,
 } from "./api";
 import { type AuthUser, fetchCurrentUser, goToLogin, logout as apiLogout } from "./auth";
 import { LegoModal } from "./components/LegoModal";
@@ -96,6 +96,10 @@ export function App() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loginPromptReason, setLoginPromptReason] = useState<string | null>(null);
 
+  // Server-truth usage for logged-in users. Anonymous users keep the client-only
+  // 3/day cap via `credits`/localStorage below.
+  const [serverUsage, setServerUsage] = useState<Usage | null>(null);
+
   useEffect(() => {
     fetchCurrentUser()
       .then(setUser)
@@ -108,29 +112,29 @@ export function App() {
   // logout handler so the save effect can't overwrite localStorage with the
   // logged-in snapshot mid-transition.
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setServerUsage(null);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
-        const [serverGens, serverCredits] = await Promise.all([
+        const [serverGens, usage] = await Promise.all([
           fetchGenerations(),
-          fetchCredits(),
+          fetchUsage(),
         ]);
         if (cancelled) return;
         const localGens = loadGenerations();
-        const localCredits = loadCredits();
         const shouldMigrate = serverGens.length === 0 && localGens && localGens.length > 0;
         if (shouldMigrate && localGens) {
           await Promise.allSettled(localGens.map((g) => postGeneration(g)));
-          if (localCredits != null) await patchCredits(localCredits).catch(() => {});
           if (cancelled) return;
           setGenerations(localGens);
-          setCredits(localCredits ?? 0);
           showToast("라이브러리를 계정으로 옮겼어요");
         } else {
           setGenerations(serverGens.length > 0 ? serverGens : SEED_GENERATIONS);
-          setCredits(serverCredits);
         }
+        setServerUsage(usage);
       } catch (e) {
         if (cancelled) return;
         showToast(`라이브러리 동기화 실패: ${e instanceof Error ? e.message : ""}`);
@@ -208,6 +212,21 @@ export function App() {
 
   const currentGen = currentGenId ? findGen(currentGenId) : null;
 
+  // Logged-in: serverUsage from /api/usage. Anonymous: a synthetic Usage built
+  // from localStorage credits so Topbar + checks have one shape to work with.
+  const displayUsage: Usage = user && serverUsage
+    ? serverUsage
+    : { used: 3 - credits, limit: 3, periodLabel: "오늘", windowStart: "" };
+  const overQuota = displayUsage.limit !== null && displayUsage.used >= displayUsage.limit;
+
+  function consumeOneUse() {
+    if (user && serverUsage) {
+      setServerUsage({ ...serverUsage, used: serverUsage.used + 1 });
+    } else {
+      setCredits((c) => Math.max(0, c - 1));
+    }
+  }
+
   const lineageChain = useMemo<Generation[]>(() => {
     if (!currentGen) return [];
     const chain: Generation[] = [currentGen];
@@ -228,8 +247,8 @@ export function App() {
 
   async function generate(promptText: string, opts: VariationOptions = {}) {
     if (!promptText.trim()) return;
-    if (credits <= 0) {
-      showToast("오늘 무료 생성 한도를 모두 사용했어요. Pro로 업그레이드하세요!");
+    if (overQuota) {
+      showToast(`${displayUsage.periodLabel} 한도를 모두 사용했어요. ${user ? "Pro로 업그레이드하세요!" : "로그인하면 더 많이 생성할 수 있어요."}`);
       return;
     }
     setStage("loading");
@@ -261,15 +280,13 @@ export function App() {
       setGenerations((gs) => [newGen, ...gs]);
       setCurrentGenId(newGen.id);
       setStage("results");
-      const newCredits = Math.max(0, credits - 1);
-      setCredits(newCredits);
+      consumeOneUse();
       setPlayingId(newGen.songs[0].id);
       setProgress(0);
       if (user) {
         withRetry(() => postGeneration(newGen)).then((ok) => {
           if (!ok) showToast(`"${newGen.songs[0].title}" 저장 실패 — 새로고침 시 사라질 수 있어요`);
         });
-        withRetry(() => patchCredits(newCredits));
       }
     } catch (e) {
       showToast(`생성 실패: ${e instanceof Error ? e.message : "백엔드를 확인하세요"}`);
@@ -390,8 +407,8 @@ export function App() {
 
   async function handleRepaintSubmit(startSec: number, endSec: number, caption: string) {
     if (!repaintFor) return;
-    if (credits <= 0) {
-      showToast("오늘 무료 생성 한도를 모두 사용했어요. Pro로 업그레이드하세요!");
+    if (overQuota) {
+      showToast(`${displayUsage.periodLabel} 한도를 모두 사용했어요.`);
       setRepaintFor(null);
       return;
     }
@@ -419,8 +436,7 @@ export function App() {
       setGenerations((gs) => [newGen, ...gs]);
       setCurrentGenId(newGen.id);
       setStage("results");
-      const newCredits = Math.max(0, credits - 1);
-      setCredits(newCredits);
+      consumeOneUse();
       setPlayingId(newGen.songs[0].id);
       setProgress(0);
       setRepaintFor(null);
@@ -428,7 +444,6 @@ export function App() {
         withRetry(() => postGeneration(newGen)).then((ok) => {
           if (!ok) showToast(`"${newGen.songs[0].title}" 저장 실패 — 새로고침 시 사라질 수 있어요`);
         });
-        withRetry(() => patchCredits(newCredits));
       }
     } catch (e) {
       showToast(`부분 수정 실패: ${e instanceof Error ? e.message : "백엔드를 확인하세요"}`);
@@ -439,8 +454,8 @@ export function App() {
 
   async function handleLegoSubmit(instruments: string[], caption: string) {
     if (!legoFor) return;
-    if (credits <= 0) {
-      showToast("오늘 무료 생성 한도를 모두 사용했어요. Pro로 업그레이드하세요!");
+    if (overQuota) {
+      showToast(`${displayUsage.periodLabel} 한도를 모두 사용했어요.`);
       setLegoFor(null);
       return;
     }
@@ -467,8 +482,7 @@ export function App() {
       setGenerations((gs) => [newGen, ...gs]);
       setCurrentGenId(newGen.id);
       setStage("results");
-      const newCredits = Math.max(0, credits - 1);
-      setCredits(newCredits);
+      consumeOneUse();
       setPlayingId(newGen.songs[0].id);
       setProgress(0);
       setLegoFor(null);
@@ -476,7 +490,6 @@ export function App() {
         withRetry(() => postGeneration(newGen)).then((ok) => {
           if (!ok) showToast(`"${newGen.songs[0].title}" 저장 실패 — 새로고침 시 사라질 수 있어요`);
         });
-        withRetry(() => patchCredits(newCredits));
       }
     } catch (e) {
       showToast(`악기 변경 실패: ${e instanceof Error ? e.message : "백엔드를 확인하세요"}`);
@@ -521,7 +534,7 @@ export function App() {
       <Topbar
         page={page}
         onPage={setPage}
-        credits={credits}
+        usage={displayUsage}
         onHome={handleStartFresh}
         user={user}
         onLogin={goToLogin}
@@ -557,7 +570,6 @@ export function App() {
               onLike={handleLike}
               onAction={handleAction}
               onVariation={handleVariation}
-              credits={credits}
               findSong={findSong}
               songLengthSec={songLengthSec}
             />

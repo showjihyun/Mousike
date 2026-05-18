@@ -29,7 +29,6 @@ interface HomePageProps {
   onLike: (id: string) => void;
   onAction: (action: SongAction, song: Song) => void;
   onVariation: (kind: VariationType) => void;
-  credits: number;
   findSong: (id: string) => Song | null;
   songLengthSec: number;
 }

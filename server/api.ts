@@ -5,7 +5,8 @@ import { existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { getSupabase } from "./db.js";
-import { requireAuth } from "./auth.js";
+import { requireAuth, type AuthUser } from "./auth.js";
+import { readUsage } from "./quota.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AUDIO_CACHE_DIR = join(__dirname, "audio-cache");
@@ -211,6 +212,16 @@ export function mountApi(app: Express): void {
         .eq("user_id", userId(req));
       if (error) throw error;
       res.status(204).end();
+    } catch (err) {
+      res.status(500).json({ error: errorMessage(err) });
+    }
+  });
+
+  app.get("/api/usage", requireAuth, async (req, res) => {
+    try {
+      const u = req.user as AuthUser;
+      const usage = await readUsage(u.id, u.tier);
+      res.json(usage);
     } catch (err) {
       res.status(500).json({ error: errorMessage(err) });
     }

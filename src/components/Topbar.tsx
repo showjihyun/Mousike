@@ -1,3 +1,4 @@
+import type { Usage } from "../api";
 import type { AuthUser } from "../auth";
 import type { Page } from "../types";
 import { Icon } from "./Icon";
@@ -5,14 +6,34 @@ import { Icon } from "./Icon";
 interface TopbarProps {
   page: Page;
   onPage: (page: Page) => void;
-  credits: number;
+  usage: Usage;
   onHome?: () => void;
   user: AuthUser | null;
   onLogin: () => void;
   onLogout: () => void;
 }
 
-export function Topbar({ page, onPage, credits, onHome, user, onLogin, onLogout }: TopbarProps) {
+function UsageChip({ usage }: { usage: Usage }) {
+  if (usage.limit === null) {
+    return (
+      <div className="credit-pill" title="무제한">
+        <Icon name="sparkles" size={12} />
+        {usage.periodLabel}
+      </div>
+    );
+  }
+  return (
+    <div
+      className="credit-pill"
+      title={`${usage.periodLabel} ${usage.used}회 사용 (${Math.max(0, usage.limit - usage.used)}회 남음)`}
+    >
+      <Icon name="sparkles" size={12} />
+      {usage.periodLabel} <b>{Math.max(0, usage.limit - usage.used)}/{usage.limit}</b>
+    </div>
+  );
+}
+
+export function Topbar({ page, onPage, usage, onHome, user, onLogin, onLogout }: TopbarProps) {
   return (
     <div className="topbar">
       <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
@@ -31,10 +52,7 @@ export function Topbar({ page, onPage, credits, onHome, user, onLogin, onLogout 
         </div>
       </div>
       <div className="topright">
-        <div className="credit-pill" title="무료 사용자는 하루 3곡 생성">
-          <Icon name="sparkles" size={12} />
-          오늘 <b>{credits}/3</b>
-        </div>
+        <UsageChip usage={usage} />
         {user ? (
           <>
             <span className="user-chip" title={user.email}>

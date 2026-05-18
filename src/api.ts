@@ -88,6 +88,19 @@ export async function fetchCredits(): Promise<number> {
   return data.balance;
 }
 
+export interface Usage {
+  used: number;
+  limit: number | null;
+  periodLabel: string;
+  windowStart: string;
+}
+
+export async function fetchUsage(): Promise<Usage> {
+  const res = await fetch(`${BACKEND_URL}/api/usage`, { credentials: "include" });
+  if (!res.ok) throw new Error(`Backend error ${res.status}`);
+  return (await res.json()) as Usage;
+}
+
 export async function patchCredits(balance: number): Promise<void> {
   const res = await fetch(`${BACKEND_URL}/api/credits`, {
     method: "PATCH",

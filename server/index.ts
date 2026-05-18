@@ -6,9 +6,11 @@ import { promisify } from "util";
 import { mkdirSync, existsSync } from "fs";
 import { join, dirname, basename } from "path";
 import { fileURLToPath } from "url";
+import rateLimit from "express-rate-limit";
 import { mountAuth, requireAuth } from "./auth.js";
 import { mountApi } from "./api.js";
 import { mixWatermark } from "./watermark.js";
+import { logUsage, readUsage } from "./quota.js";
 
 const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -31,6 +33,33 @@ function durationForUser(user: Express.User | undefined): number {
     ? PAID_DURATION_SEC
     : FREE_DURATION_SEC;
 }
+
+// Returns true if the user is under quota (or anonymous — anonymous traffic is
+// gated by the IP rate limiter, not this function). On 'over quota', writes a
+// 429 response itself so callers can simply `return` without further action.
+async function requireQuota(req: express.Request, res: express.Response): Promise<boolean> {
+  const user = req.user;
+  if (!user) return true;
+  const usage = await readUsage(user.id, user.tier);
+  if (usage.limit !== null && usage.used >= usage.limit) {
+    res.status(429).json({
+      error: `${usage.periodLabel} 한도(${usage.limit})를 모두 사용했어요.`,
+      usage,
+    });
+    return false;
+  }
+  return true;
+}
+
+// Anonymous spam guard. Authenticated callers also pass through, but the
+// per-user quota check above is the load-bearing one for them.
+const generateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 10,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "요청이 너무 많아요. 잠시 후 다시 시도해주세요." },
+});
 
 async function translateKoreanToEnglish(prompt: string): Promise<string> {
   const res = await fetch(OLLAMA_URL, {
@@ -205,7 +234,7 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/generate", async (req, res) => {
+app.post("/api/generate", generateLimiter, async (req, res) => {
   const { prompt, lang } = req.body as { prompt?: unknown; lang?: unknown };
 
   if (typeof prompt !== "string" || prompt.trim() === "") {
@@ -216,6 +245,7 @@ app.post("/api/generate", async (req, res) => {
     res.status(400).json({ error: "lang must be KO or EN" });
     return;
   }
+  if (!(await requireQuota(req, res))) return;
 
   try {
     let caption = prompt.trim();
@@ -238,6 +268,7 @@ app.post("/api/generate", async (req, res) => {
       ...(translatedCaption !== undefined && { translatedCaption }),
     }));
 
+    if (req.user) await logUsage(req.user.id, "generate");
     res.json({ songs });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -301,6 +332,7 @@ app.post("/api/repaint", requireAuth, async (req, res) => {
     res.status(400).json({ error: "startSec and endSec must be numbers with startSec < endSec" });
     return;
   }
+  if (!(await requireQuota(req, res))) return;
 
   try {
     const localPath = resolveAudioUrlToLocalPath(sourceAudioUrl);
@@ -382,6 +414,7 @@ app.post("/api/repaint", requireAuth, async (req, res) => {
       ...(typeof parentSongId === "string" && { parentSongId }),
     }));
 
+    if (req.user) await logUsage(req.user.id, "repaint");
     res.json({ songs });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -406,6 +439,7 @@ app.post("/api/lego", requireAuth, async (req, res) => {
     res.status(400).json({ error: "instruments must be a non-empty array" });
     return;
   }
+  if (!(await requireQuota(req, res))) return;
 
   try {
     const localPath = resolveAudioUrlToLocalPath(sourceAudioUrl);
@@ -493,6 +527,7 @@ app.post("/api/lego", requireAuth, async (req, res) => {
       ...(typeof parentSongId === "string" && { parentSongId }),
     }));
 
+    if (req.user) await logUsage(req.user.id, "lego");
     res.json({ songs });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
