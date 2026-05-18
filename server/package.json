@@ -16,7 +16,8 @@
     "express-session": "^1.18.0",
     "mousike": "file:..",
     "passport": "^0.7.0",
-    "passport-google-oauth20": "^2.0.0"
+    "passport-google-oauth20": "^2.0.0",
+    "pdfkit": "^0.18.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -25,6 +26,7 @@
     "@types/node": "^22.7.0",
     "@types/passport": "^1.0.16",
     "@types/passport-google-oauth20": "^2.0.16",
+    "@types/pdfkit": "^0.17.6",
     "@types/pg": "^8.20.0",
     "pg": "^8.21.0",
     "tsx": "^4.19.0",

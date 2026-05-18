@@ -7,6 +7,7 @@ import { fileURLToPath } from "url";
 import { getSupabase } from "./db.js";
 import { requireAuth, type AuthUser } from "./auth.js";
 import { readUsage } from "./quota.js";
+import { renderCert } from "./cert.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AUDIO_CACHE_DIR = join(__dirname, "audio-cache");
@@ -257,6 +258,45 @@ export function mountApi(app: Express): void {
       });
       if (error) throw error;
       res.status(204).end();
+    } catch (err) {
+      res.status(500).json({ error: errorMessage(err) });
+    }
+  });
+
+  app.get("/api/cert/:songId", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as AuthUser;
+      const sb = getSupabase();
+      const { data, error } = await sb
+        .from("songs")
+        .select("id, title, prompt, audio_url, created_at")
+        .eq("id", String(req.params.songId ?? ""))
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) {
+        res.status(404).json({ error: "song not found" });
+        return;
+      }
+      const row = data as {
+        id: string;
+        title: string;
+        prompt: string;
+        audio_url: string | null;
+        created_at: string;
+      };
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="mousike-cert-${row.id}.pdf"`,
+      );
+      renderCert(user, {
+        id: row.id,
+        title: row.title,
+        prompt: row.prompt,
+        audioUrl: row.audio_url,
+        createdAt: new Date(row.created_at),
+      }).pipe(res);
     } catch (err) {
       res.status(500).json({ error: errorMessage(err) });
     }

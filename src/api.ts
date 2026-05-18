@@ -111,6 +111,15 @@ export async function patchCredits(balance: number): Promise<void> {
   if (!res.ok) throw new Error(`Backend error ${res.status}`);
 }
 
+export async function downloadCertBlob(songId: string): Promise<Blob> {
+  const res = await fetch(`${BACKEND_URL}/api/cert/${songId}`, { credentials: "include" });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error ?? `HTTP ${res.status}`);
+  }
+  return res.blob();
+}
+
 export async function patchSongLiked(songId: string, liked: boolean): Promise<void> {
   const res = await fetch(`${BACKEND_URL}/api/songs/${songId}`, {
     method: "PATCH",

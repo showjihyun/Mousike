@@ -11,6 +11,7 @@ import {
   postGeneration,
   patchSongLiked,
   fetchUsage,
+  downloadCertBlob,
   type Lang,
   type Usage,
 } from "./api";
@@ -358,9 +359,34 @@ export function App() {
     }
   }
 
+  async function downloadCert(song: Song) {
+    if (!user) {
+      setLoginPromptReason("저작권 인증서 발급은 로그인이 필요합니다.");
+      return;
+    }
+    try {
+      const blob = await downloadCertBlob(song.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `mousike-cert-${song.id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast(`"${song.title}" 인증서를 발급했어요.`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "다시 시도하세요";
+      const friendly = msg === "song not found"
+        ? "이 곡은 아직 서버에 저장되지 않아 인증서를 발급할 수 없어요."
+        : msg;
+      showToast(`인증서 발급 실패: ${friendly}`);
+    }
+  }
+
   function handleAction(action: SongAction, song: Song) {
     if (action === "download") downloadSong(song);
-    else if (action === "certificate") showToast("저작권 안전성 인증서 PDF를 발급했어요.");
+    else if (action === "certificate") downloadCert(song);
     else if (action === "share") showToast("공유 링크가 클립보드에 복사됐어요.");
   }
 
