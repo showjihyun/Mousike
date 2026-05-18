@@ -4,7 +4,8 @@ import type { Express, RequestHandler } from "express";
 import session from "express-session";
 import passport from "passport";
 import { Strategy as GoogleStrategy, type Profile } from "passport-google-oauth20";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { getSupabase } from "./db.js";
 
 export interface AuthUser {
   id: string;
@@ -18,12 +19,6 @@ function requireEnv(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing required env var: ${name}`);
   return v;
-}
-
-function buildSupabase(): SupabaseClient {
-  const url = requireEnv("SUPABASE_URL");
-  const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
-  return createClient(url, key, { auth: { persistSession: false } });
 }
 
 // Upsert by google_id so re-login updates name/picture without dup rows.
@@ -59,7 +54,7 @@ export function mountAuth(app: Express): void {
     ?? "http://localhost:8787/auth/google/callback";
   const clientOrigin = process.env.CLIENT_ORIGIN ?? "http://localhost:5173";
 
-  const supabase = buildSupabase();
+  const supabase = getSupabase();
 
   app.use(
     session({

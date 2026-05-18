@@ -6,7 +6,8 @@ import { promisify } from "util";
 import { mkdirSync } from "fs";
 import { join, dirname, basename } from "path";
 import { fileURLToPath } from "url";
-import { mountAuth } from "./auth.js";
+import { mountAuth, requireAuth } from "./auth.js";
+import { mountApi } from "./api.js";
 
 const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -175,9 +176,11 @@ app.use("/audio", express.static(AUDIO_CACHE_DIR));
 
 try {
   mountAuth(app);
+  mountApi(app);
 } catch (err) {
   // Missing env vars: keep the server running so the free-tier flow still works,
-  // but /auth/* will 404 until the operator sets GOOGLE_*, SESSION_SECRET, SUPABASE_*.
+  // but /auth/* and /api/{generations,songs,credits,download} will 404 until
+  // the operator sets GOOGLE_*, SESSION_SECRET, SUPABASE_*.
   console.warn("[auth] disabled —", err instanceof Error ? err.message : err);
 }
 
@@ -258,7 +261,7 @@ function resolveAudioUrlToLocalPath(audioUrl: string): string {
   return join(AUDIO_CACHE_DIR, filename);
 }
 
-app.post("/api/repaint", async (req, res) => {
+app.post("/api/repaint", requireAuth, async (req, res) => {
   const { sourceAudioUrl, startSec, endSec, caption, parentSongId } = req.body as {
     sourceAudioUrl?: unknown;
     startSec?: unknown;
@@ -363,7 +366,7 @@ app.post("/api/repaint", async (req, res) => {
   }
 });
 
-app.post("/api/lego", async (req, res) => {
+app.post("/api/lego", requireAuth, async (req, res) => {
   const { sourceAudioUrl, instruments, caption, parentSongId } = req.body as {
     sourceAudioUrl?: unknown;
     instruments?: unknown;
