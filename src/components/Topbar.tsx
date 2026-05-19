@@ -12,6 +12,7 @@ interface TopbarProps {
   onLogin: () => void;
   onLogout: () => void;
   onUpgrade: () => void;
+  onHelp: () => void;
 }
 
 function UsageChip({ usage }: { usage: Usage }) {
@@ -34,7 +35,7 @@ function UsageChip({ usage }: { usage: Usage }) {
   );
 }
 
-export function Topbar({ page, onPage, usage, onHome, user, onLogin, onLogout, onUpgrade }: TopbarProps) {
+export function Topbar({ page, onPage, usage, onHome, user, onLogin, onLogout, onUpgrade, onHelp }: TopbarProps) {
   return (
     <div className="topbar">
       <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
@@ -49,7 +50,7 @@ export function Topbar({ page, onPage, usage, onHome, user, onLogin, onLogout, o
         <div className="topnav">
           <button className={page === "home" ? "active" : ""} onClick={() => onPage("home")}>탐험</button>
           <button className={page === "library" ? "active" : ""} onClick={() => onPage("library")}>내 라이브러리</button>
-          <button onClick={() => alert("도움말은 아직 준비 중이에요!")}>도움말</button>
+          <button onClick={onHelp}>도움말</button>
         </div>
       </div>
       <div className="topright">

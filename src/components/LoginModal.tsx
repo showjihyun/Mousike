@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { goToLogin } from "../auth";
 
 interface LoginModalProps {
@@ -6,6 +7,12 @@ interface LoginModalProps {
 }
 
 export function LoginModal({ reason, onClose }: LoginModalProps) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>

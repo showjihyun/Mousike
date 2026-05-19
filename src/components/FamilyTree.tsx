@@ -8,10 +8,16 @@ interface FamilyTreeProps {
   onJumpToGen: (genId: string) => void;
 }
 
-function collectSubtree(root: Generation, byParent: Map<string, Generation[]>): Generation[] {
+function collectSubtree(
+  root: Generation,
+  byParent: Map<string, Generation[]>,
+  visited: Set<string> = new Set(),
+): Generation[] {
+  if (visited.has(root.id)) return [];
+  visited.add(root.id);
   const out: Generation[] = [root];
   const children = byParent.get(root.id) || [];
-  for (const c of children) out.push(...collectSubtree(c, byParent));
+  for (const c of children) out.push(...collectSubtree(c, byParent, visited));
   return out;
 }
 
@@ -24,7 +30,10 @@ export function FamilyTree({ generations, onJumpToGen }: FamilyTreeProps) {
   }
   const roots = byParent.get("_root") || [];
 
+  const seen = new Set<string>();
   function renderNode(gen: Generation, depth: number) {
+    if (seen.has(gen.id)) return null;
+    seen.add(gen.id);
     const likeCount = gen.songs.filter((s) => s.liked).length;
     const children = byParent.get(gen.id) || [];
     return (

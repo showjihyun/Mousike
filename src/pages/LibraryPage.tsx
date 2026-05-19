@@ -60,35 +60,47 @@ export function LibraryPage({ generations, playingId, onPlay, onPause, onAction,
           </div>
         ) : (
           <div className="library-grid">
-            {filtered.map((song, idx) => (
-              <div
-                key={song.id}
-                className="library-row"
-                onClick={() => (playingId === song.id ? onPause() : onPlay(song.id))}
-              >
-                <div className="lr-idx">
-                  <span className="num">{idx + 1}</span>
-                  <span className="play"><Icon name={playingId === song.id ? "pause" : "play"} size={14} /></span>
-                </div>
-                <div>
-                  <div className="lr-title">
-                    {song.liked && <span style={{ color: "var(--accent-pink)", marginRight: 4 }}>❤</span>}
-                    {song.title}
-                  </div>
-                  <div className="lr-prompt">{song.style} · {song.bpm} BPM · {song.vibe}</div>
-                </div>
-                <div className="lr-prompt">"{song._gen.prompt}"</div>
-                <div className="lr-date">{daysAgoLabel(song._gen.daysAgo ?? 0)}</div>
-                <div className="lr-dur">{formatTime(song.durationSec)}</div>
-                <button
-                  className="lr-more"
-                  onClick={(e) => { e.stopPropagation(); onAction("download", song); }}
-                  aria-label="더보기"
+            {filtered.map((song, idx) => {
+              const togglePlay = () => (playingId === song.id ? onPause() : onPlay(song.id));
+              return (
+                <div
+                  key={song.id}
+                  className="library-row"
+                  role="button"
+                  tabIndex={0}
+                  onClick={togglePlay}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      togglePlay();
+                    }
+                  }}
                 >
-                  <Icon name="more-horizontal" size={14} />
-                </button>
-              </div>
-            ))}
+                  <div className="lr-idx">
+                    <span className="num">{idx + 1}</span>
+                    <span className="play"><Icon name={playingId === song.id ? "pause" : "play"} size={14} /></span>
+                  </div>
+                  <div>
+                    <div className="lr-title">
+                      {song.liked && <span style={{ color: "var(--accent-pink)", marginRight: 4 }}>❤</span>}
+                      {song.title}
+                    </div>
+                    <div className="lr-prompt">{song.style} · {song.bpm} BPM · {song.vibe}</div>
+                  </div>
+                  <div className="lr-prompt">"{song._gen.prompt}"</div>
+                  <div className="lr-date">{daysAgoLabel(song._gen.daysAgo ?? 0)}</div>
+                  <div className="lr-dur">{formatTime(song.durationSec)}</div>
+                  <button
+                    className="lr-more"
+                    onClick={(e) => { e.stopPropagation(); onAction("download", song); }}
+                    aria-label="다운로드"
+                    title="다운로드"
+                  >
+                    <Icon name="download" size={14} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )
       )}

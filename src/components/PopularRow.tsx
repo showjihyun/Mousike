@@ -11,7 +11,7 @@ export function PopularRow({ items, onPlay }: PopularRowProps) {
     <div className="popular-section">
       <div className="popular-head">
         <h3>오늘 가장 많이 들은 음악</h3>
-        <a className="popular-link" href="#" onClick={(e) => e.preventDefault()}>전체 보기 →</a>
+        <button className="popular-link" type="button">전체 보기 →</button>
       </div>
       <div className="popular-row">
         {items.map((item) => (

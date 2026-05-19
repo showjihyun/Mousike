@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import type { Tier } from "../auth";
 
 interface UpgradeModalProps {
@@ -52,6 +53,12 @@ const PLANS: Plan[] = [
 ];
 
 export function UpgradeModal({ currentTier, onClose }: UpgradeModalProps) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-card upgrade-card" onClick={(e) => e.stopPropagation()}>

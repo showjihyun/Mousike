@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Song } from "../types";
 
 const INSTRUMENT_GROUPS: ReadonlyArray<{ label: string; items: readonly string[] }> = [
@@ -22,6 +22,14 @@ interface LegoModalProps {
 export function LegoModal({ song, onClose, onSubmit, loading }: LegoModalProps) {
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [caption, setCaption] = useState("");
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !loading) onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose, loading]);
 
   function toggle(name: string) {
     setChecked((prev) => {

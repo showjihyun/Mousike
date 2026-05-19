@@ -182,7 +182,10 @@ export function App() {
       setPlayingId(null);
       return;
     }
-    if (audio.src !== song.audioUrl) audio.src = song.audioUrl;
+    if (audio.src !== song.audioUrl) {
+      audio.src = song.audioUrl;
+      audio.dataset.songId = song.id;
+    }
     audio.play().catch(() => setPlayingId(null));
   }, [playingId, findSong]);
 
@@ -193,13 +196,17 @@ export function App() {
     const onTimeUpdate = () => setProgress(audio.currentTime / audio.duration);
     const onEnded = () => { setPlayingId(null); setProgress(0); };
     const onLoadedMetadata = () => {
+      // Match by id stored in dataset — `audio.src` returns the browser-
+      // resolved absolute URL, which doesn't always equal song.audioUrl as
+      // a string (origins, query strings, etc.).
+      const songId = audio.dataset.songId;
+      if (!songId) return;
       const dur = audio.duration;
+      if (!Number.isFinite(dur)) return;
       setGenerations((gs) =>
         gs.map((g) => ({
           ...g,
-          songs: g.songs.map((s) =>
-            s.audioUrl === audio.src ? { ...s, durationSec: dur } : s,
-          ),
+          songs: g.songs.map((s) => (s.id === songId ? { ...s, durationSec: dur } : s)),
         })),
       );
     };
@@ -389,7 +396,7 @@ export function App() {
   function handleAction(action: SongAction, song: Song) {
     if (action === "download") downloadSong(song);
     else if (action === "certificate") downloadCert(song);
-    else if (action === "share") showToast("공유 링크가 클립보드에 복사됐어요.");
+    else if (action === "share") showToast("공유 기능은 곧 추가됩니다.");
   }
 
   function handleVariation(kind: VariationType) {
@@ -528,7 +535,7 @@ export function App() {
 
   function handleJumpToGen(genId: string) {
     const gen = findGen(genId);
-    if (!gen) return;
+    if (!gen || gen.songs.length === 0) return;
     setCurrentGenId(genId);
     setStage("results");
     setPrompt(gen.prompt);
@@ -573,12 +580,19 @@ export function App() {
         user={user}
         onLogin={goToLogin}
         onLogout={async () => {
-          await apiLogout();
-          setGenerations(loadGenerations() ?? SEED_GENERATIONS);
-          setCredits(loadCredits() ?? 3);
-          setUser(null);
+          // Reset client state even if the network call fails — otherwise a
+          // server unreachable at logout time would leave the user logged-in
+          // in the UI but with a session the server has invalidated.
+          try {
+            await apiLogout();
+          } finally {
+            setGenerations(loadGenerations() ?? SEED_GENERATIONS);
+            setCredits(loadCredits() ?? 3);
+            setUser(null);
+          }
         }}
         onUpgrade={() => setUpgradeOpen(true)}
+        onHelp={() => showToast("도움말은 아직 준비 중이에요!")}
       />
 
       <div className="main">
@@ -631,13 +645,13 @@ export function App() {
         onToggle={handleToggleMini}
         onClose={() => setPlayingId(null)}
         onNext={() => {
-          if (!currentGen) return;
+          if (!currentGen || currentGen.songs.length === 0) return;
           const idx = currentGen.songs.findIndex((r) => r.id === playingId);
           const nextIdx = (idx + 1) % currentGen.songs.length;
           handlePlay(currentGen.songs[nextIdx].id);
         }}
         onPrev={() => {
-          if (!currentGen) return;
+          if (!currentGen || currentGen.songs.length === 0) return;
           const idx = currentGen.songs.findIndex((r) => r.id === playingId);
           const prevIdx = (idx - 1 + currentGen.songs.length) % currentGen.songs.length;
           handlePlay(currentGen.songs[prevIdx].id);

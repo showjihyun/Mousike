@@ -117,6 +117,12 @@ export async function downloadCertBlob(songId: string): Promise<Blob> {
     const data = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(data.error ?? `HTTP ${res.status}`);
   }
+  // Sanity check — if a proxy/captive portal hijacks the response with HTML,
+  // we'd otherwise save the HTML as a .pdf and the user opens a broken file.
+  const ct = res.headers.get("content-type") ?? "";
+  if (!ct.includes("pdf")) {
+    throw new Error("응답이 PDF가 아닙니다");
+  }
   return res.blob();
 }
 

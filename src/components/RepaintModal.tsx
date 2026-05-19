@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Song } from "../types";
 
 interface RepaintModalProps {
@@ -8,13 +8,28 @@ interface RepaintModalProps {
   loading: boolean;
 }
 
+function parseSec(raw: string): number {
+  const v = Number(raw);
+  return Number.isFinite(v) && v >= 0 ? v : 0;
+}
+
 export function RepaintModal({ song, onClose, onSubmit, loading }: RepaintModalProps) {
   const [startSec, setStartSec] = useState(Math.floor(song.durationSec / 3));
   const [endSec, setEndSec] = useState(Math.floor((song.durationSec * 2) / 3));
   const [caption, setCaption] = useState("");
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !loading) onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose, loading]);
+
+  const submitDisabled = loading || !Number.isFinite(startSec) || !Number.isFinite(endSec) || startSec >= endSec;
+
   function handleSubmit() {
-    if (startSec >= endSec) return;
+    if (submitDisabled) return;
     onSubmit(startSec, endSec, caption);
   }
 
@@ -34,7 +49,7 @@ export function RepaintModal({ song, onClose, onSubmit, loading }: RepaintModalP
               min={0}
               max={endSec - 1}
               value={startSec}
-              onChange={(e) => setStartSec(Number(e.target.value))}
+              onChange={(e) => setStartSec(parseSec(e.target.value))}
               disabled={loading}
             />
           </div>
@@ -45,7 +60,7 @@ export function RepaintModal({ song, onClose, onSubmit, loading }: RepaintModalP
               type="number"
               min={startSec + 1}
               value={endSec}
-              onChange={(e) => setEndSec(Number(e.target.value))}
+              onChange={(e) => setEndSec(parseSec(e.target.value))}
               disabled={loading}
             />
           </div>
@@ -68,7 +83,7 @@ export function RepaintModal({ song, onClose, onSubmit, loading }: RepaintModalP
           <button
             className="modal-btn-submit"
             onClick={handleSubmit}
-            disabled={loading || startSec >= endSec}
+            disabled={submitDisabled}
           >
             {loading ? "생성 중…" : "생성"}
           </button>
