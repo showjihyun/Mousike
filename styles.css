@@ -1473,3 +1473,8 @@ input, textarea {
   color: var(--notion-blue);
   font-weight: var(--fw-semibold);
 }
+.plan-buy {
+  margin-top: 10px;
+  width: 100%;
+}
+.plan-buy:disabled { opacity: 0.5; cursor: not-allowed; }

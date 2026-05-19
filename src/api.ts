@@ -144,6 +144,56 @@ export async function fetchUsage(): Promise<Usage> {
   return (await res.json()) as Usage;
 }
 
+export interface CheckoutResponse {
+  orderId: string;
+  amount: number;
+  orderName: string;
+  customerEmail: string;
+  customerName: string;
+}
+
+export async function fetchBillingConfig(): Promise<{ clientKey: string }> {
+  const res = await fetch(`${BACKEND_URL}/api/billing/config`);
+  if (!res.ok) throw new Error(`Backend error ${res.status}`);
+  return (await res.json()) as { clientKey: string };
+}
+
+export async function postCheckout(args: {
+  tier: "starter" | "pro";
+  businessNo?: string;
+  receiptEmail?: string;
+}): Promise<CheckoutResponse> {
+  const res = await fetch(`${BACKEND_URL}/api/billing/checkout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(args),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Backend error ${res.status}`);
+  }
+  return (await res.json()) as CheckoutResponse;
+}
+
+export async function postConfirm(args: {
+  paymentKey: string;
+  orderId: string;
+  amount: number;
+}): Promise<{ ok: true; tier: "starter" | "pro"; expiresAt: string }> {
+  const res = await fetch(`${BACKEND_URL}/api/billing/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(args),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Backend error ${res.status}`);
+  }
+  return (await res.json()) as { ok: true; tier: "starter" | "pro"; expiresAt: string };
+}
+
 export async function downloadCertBlob(songId: string): Promise<Blob> {
   const res = await fetch(`${BACKEND_URL}/api/cert/${songId}`, { credentials: "include" });
   if (!res.ok) {

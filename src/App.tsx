@@ -12,6 +12,7 @@ import {
   patchSongLiked,
   fetchUsage,
   downloadCertBlob,
+  postConfirm,
   type Lang,
   type Usage,
 } from "./api";
@@ -107,6 +108,41 @@ export function App() {
     fetchCurrentUser()
       .then(setUser)
       .catch(() => setUser(null));
+  }, []);
+
+  // Toss redirects to /billing/success or /billing/fail on its way back from
+  // the payment UI. We POST the triple to /api/billing/confirm, refetch the
+  // user (tier changed), then rewrite the URL so refreshes don't re-confirm.
+  useEffect(() => {
+    const path = window.location.pathname;
+    if (path !== "/billing/success" && path !== "/billing/fail") return;
+    const params = new URLSearchParams(window.location.search);
+    if (path === "/billing/fail") {
+      const msg = params.get("message") ?? "결제가 취소되었어요.";
+      showToast(`결제 실패: ${msg}`);
+      window.history.replaceState({}, "", "/");
+      return;
+    }
+    const paymentKey = params.get("paymentKey");
+    const orderId = params.get("orderId");
+    const amount = Number(params.get("amount"));
+    if (!paymentKey || !orderId || !Number.isFinite(amount)) {
+      showToast("결제 정보가 올바르지 않아요.");
+      window.history.replaceState({}, "", "/");
+      return;
+    }
+    (async () => {
+      try {
+        await postConfirm({ paymentKey, orderId, amount });
+        const u = await fetchCurrentUser();
+        setUser(u);
+        showToast("결제가 완료되었어요. 새 플랜이 적용됩니다.");
+      } catch (e) {
+        showToast(`결제 확인 실패: ${e instanceof Error ? e.message : ""}`);
+      } finally {
+        window.history.replaceState({}, "", "/");
+      }
+    })();
   }, []);
 
   // On login: load library + credits from Supabase. If the server library is
@@ -699,7 +735,13 @@ export function App() {
       {upgradeOpen && (
         <UpgradeModal
           currentTier={user?.tier ?? null}
+          loggedIn={!!user}
           onClose={() => setUpgradeOpen(false)}
+          onRequireLogin={() => {
+            setUpgradeOpen(false);
+            setLoginPromptReason("결제하려면 로그인이 필요해요.");
+          }}
+          onError={(msg) => showToast(msg)}
         />
       )}
     </div>
