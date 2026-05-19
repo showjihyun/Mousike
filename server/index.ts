@@ -14,6 +14,13 @@ const FREE_DURATION_SEC = 30;
 const STARTER_DURATION_SEC = 90;
 const PRO_DURATION_SEC = 180;
 
+// Opt-in dev shortcut: skips quota + rate-limit checks. Polarity is
+// fail-safe — anyone deploying without setting MOUSIKE_DEV=1 gets the
+// production behaviour (limits on). Don't switch this to a NODE_ENV
+// negation; that would silently disable the limits on any deploy that
+// forgets to set NODE_ENV.
+const IS_DEV = process.env.MOUSIKE_DEV === "1";
+
 // Caps caller-supplied text fields so a 10MB prompt can't be forwarded to
 // Ollama → ACE-Step. express.json's 100KB default body limit also covers this,
 // but the explicit cap fails fast with a useful message.
@@ -50,6 +57,7 @@ function durationForUser(user: Express.User | undefined): number {
 // gated by the IP rate limiter, not this function). On 'over quota', writes a
 // 429 response itself so callers can simply `return` without further action.
 async function requireQuota(req: express.Request, res: express.Response): Promise<boolean> {
+  if (IS_DEV) return true;
   const user = req.user;
   if (!user) return true;
   const usage = await readUsage(user.id, user.tier);
@@ -71,6 +79,7 @@ const generateLimiter = rateLimit({
   standardHeaders: "draft-7",
   legacyHeaders: false,
   message: { error: "요청이 너무 많아요. 잠시 후 다시 시도해주세요." },
+  skip: () => IS_DEV,
 });
 
 function audioUrl(filename: string): string {
