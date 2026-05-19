@@ -1,7 +1,16 @@
 import { useState } from "react";
 import type { Song } from "../types";
 
-const INSTRUMENT_OPTIONS = ["기타", "피아노", "드럼", "베이스", "신디사이저", "보컬"] as const;
+const INSTRUMENT_GROUPS: ReadonlyArray<{ label: string; items: readonly string[] }> = [
+  {
+    label: "기본",
+    items: ["기타", "피아노", "드럼", "베이스", "신디사이저", "보컬"],
+  },
+  {
+    label: "오케스트라",
+    items: ["바이올린", "첼로", "플루트", "클라리넷", "트럼펫", "호른", "하프", "팀파니"],
+  },
+];
 
 interface LegoModalProps {
   song: Song;
@@ -37,20 +46,25 @@ export function LegoModal({ song, onClose, onSubmit, loading }: LegoModalProps) 
         </div>
         <div className="modal-body">
           <div className="modal-label" style={{ marginBottom: 8 }}>악기 선택 (하나 이상)</div>
-          <div className="lego-grid">
-            {INSTRUMENT_OPTIONS.map((name) => (
-              <label key={name} className={`lego-chip ${checked.has(name) ? "selected" : ""}`}>
-                <input
-                  type="checkbox"
-                  checked={checked.has(name)}
-                  onChange={() => toggle(name)}
-                  disabled={loading}
-                  style={{ display: "none" }}
-                />
-                {name}
-              </label>
-            ))}
-          </div>
+          {INSTRUMENT_GROUPS.map((group) => (
+            <div key={group.label} className="lego-group">
+              <div className="lego-group-label">{group.label}</div>
+              <div className="lego-grid">
+                {group.items.map((name) => (
+                  <label key={name} className={`lego-chip ${checked.has(name) ? "selected" : ""}`}>
+                    <input
+                      type="checkbox"
+                      checked={checked.has(name)}
+                      onChange={() => toggle(name)}
+                      disabled={loading}
+                      style={{ display: "none" }}
+                    />
+                    {name}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
           <div className="modal-row" style={{ marginTop: 12 }}>
             <label className="modal-label">추가 설명 (선택)</label>
             <input

@@ -14,12 +14,22 @@ const FREE_DURATION_SEC = 30;
 const PAID_DURATION_SEC = 90;
 
 const KO_TO_EN_INSTRUMENTS: Record<string, string> = {
+  // 기본
   기타: "electric guitar",
   피아노: "piano",
   드럼: "drums",
   베이스: "bass",
   신디사이저: "synthesizer",
   보컬: "vocals",
+  // 오케스트라
+  바이올린: "violin",
+  첼로: "cello",
+  플루트: "flute",
+  클라리넷: "clarinet",
+  트럼펫: "trumpet",
+  호른: "french horn",
+  하프: "harp",
+  팀파니: "timpani",
 };
 
 function durationForUser(user: Express.User | undefined): number {
