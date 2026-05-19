@@ -2,16 +2,12 @@
 // Anonymous flows (generate, audio playback) are NOT routed through here.
 import type { Express, Request } from "express";
 import { existsSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
+import { join } from "path";
 import { getSupabase } from "./db.js";
 import { requireAuth, type AuthUser } from "./auth.js";
 import { readUsage } from "./quota.js";
 import { renderCert } from "./cert.js";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const AUDIO_CACHE_DIR = join(__dirname, "audio-cache");
-const AUDIO_SECURE_DIR = join(__dirname, "audio-secure");
+import { AUDIO_CACHE_DIR, AUDIO_SECURE_DIR } from "./audio.js";
 
 interface SongPayload {
   id: string;

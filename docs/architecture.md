@@ -66,8 +66,15 @@ src/                            React SPA (Vite)
 
 server/                         Express + tsx
 ├── index.ts                    Bootstraps express; defines /api/generate,
-│                               /api/repaint, /api/lego; wires audio
-│                               pipeline + ACE-Step + Ollama
+│                               /api/repaint, /api/lego; route-level
+│                               quota + rate-limit logic
+├── acestep.ts                  Single runAceStep(req) entry — payload
+│                               builder, submit, SSE poll
+├── audio.ts                    audio-cache/audio-secure dirs,
+│                               processAudio (docker cp + watermark),
+│                               prepareSourceForAceStep (resolve + upload)
+├── ollama.ts                   translateKoreanToEnglish
+├── watermark.ts                ffmpeg overlay (voice tag at start + end)
 ├── auth.ts                     Passport-Google strategy + session +
 │                               /auth/google, /auth/google/callback,
 │                               /auth/me, /auth/logout
@@ -75,7 +82,6 @@ server/                         Express + tsx
 │                               /api/songs/:id, /api/credits (legacy),
 │                               /api/usage, /api/download, /api/cert
 ├── quota.ts                    Per-tier usage windows + readUsage + logUsage
-├── watermark.ts                ffmpeg overlay (voice tag at start + end)
 ├── cert.ts                     pdfkit-based license PDF renderer
 ├── db.ts                       getSupabase() singleton
 ├── migrations/
@@ -263,25 +269,21 @@ config:
 
 1. **No Toss integration** — paid tier upgrades are manual SQL. The
    moment we acquire a real first user, this hurts.
-2. **`server/index.ts` is ~600 lines** and hosts three route handlers
-   that share a large `data: unknown[]` shape for ACE-Step. Pulling
-   `/api/{generate,repaint,lego}` into their own files would let each
-   handler shrink and the shared payload builder be tested in isolation.
-3. **`credits` table is legacy** (replaced by `usage_log`). A
+2. **`credits` table is legacy** (replaced by `usage_log`). A
    `004_drop_credits.sql` migration is overdue.
-4. **Memory session store** logs a warning at boot in production-like
+3. **Memory session store** logs a warning at boot in production-like
    environments. Swap to `connect-pg-simple` against the existing
    Supabase database before deploying.
-5. **No automated tests.** Manual playwright smoke tests cover the
+4. **No automated tests.** Manual playwright smoke tests cover the
    golden paths but the cert + watermark mix paths have only been
    eyeballed.
-6. **`validateGeneration` has no array-size bounds** — a logged-in user
+5. **`validateGeneration` has no array-size bounds** — a logged-in user
    could POST an enormous generation. Low risk (only their own row),
    worth a per-field cap when convenient.
-7. **PDF cert text avoids "fi" pairs** because Noto Sans KR's GSUB
+6. **PDF cert text avoids "fi" pairs** because Noto Sans KR's GSUB
    ligature glyph extracts as a single character through pdfkit.
    Revisit if we ever change fonts.
-8. **Anonymous quota** is a per-IP rate limit only; no per-user-day cap
+7. **Anonymous quota** is a per-IP rate limit only; no per-user-day cap
    exists for them. If we ever want a strict "3/day" for non-logged-in
    users, we'd need IP-based usage_log or require login for free.
 
