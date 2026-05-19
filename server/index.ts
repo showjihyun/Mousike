@@ -4,17 +4,29 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { mountAuth, requireAuth } from "./auth.js";
 import { mountApi } from "./api.js";
-import { logUsage, readUsage } from "./quota.js";
-import { translateKoreanToEnglish } from "./ollama.js";
-import { runAceStep } from "./acestep.js";
-import { AUDIO_CACHE_DIR, prepareSourceForAceStep, processAudio } from "./audio.js";
+import { readUsage } from "./quota.js";
+import {
+  enqueue,
+  getJob,
+  inFlightCountForUser,
+  queuedDepth,
+  countUsedPlusInFlight,
+  recoverStaleRunning,
+  startWorker,
+  GLOBAL_QUEUE_CAP,
+  PER_USER_INFLIGHT_CAP,
+  type GeneratePayload,
+  type RepaintPayload,
+  type LegoPayload,
+} from "./jobs.js";
+import { AUDIO_CACHE_DIR } from "./audio.js";
 
 const PORT = 8787;
 const FREE_DURATION_SEC = 30;
 const STARTER_DURATION_SEC = 90;
 const PRO_DURATION_SEC = 180;
 
-// Opt-in dev shortcut: skips quota + rate-limit checks. Polarity is
+// Opt-in dev shortcut: skips quota + rate-limit + queue caps. Polarity is
 // fail-safe — anyone deploying without setting MOUSIKE_DEV=1 gets the
 // production behaviour (limits on). Don't switch this to a NODE_ENV
 // negation; that would silently disable the limits on any deploy that
@@ -46,6 +58,21 @@ const KO_TO_EN_INSTRUMENTS: Record<string, string> = {
   팀파니: "timpani",
 };
 
+// Mirror quota.ts TIER_RULES. Duplicated by intent — quota.ts owns the
+// "successful-only" usage view served via /api/usage; this is the
+// enqueue-side gate that counts pending jobs too, so a user can't queue past
+// their cap.
+const TIER_WINDOW_MS: Record<string, number> = {
+  free: 24 * 60 * 60 * 1000,
+  starter: 30 * 24 * 60 * 60 * 1000,
+  pro: 24 * 60 * 60 * 1000,
+};
+const TIER_LIMIT: Record<string, number | null> = {
+  free: 3,
+  starter: 30,
+  pro: null,
+};
+
 function durationForUser(user: Express.User | undefined): number {
   if (!user) return FREE_DURATION_SEC;
   if (user.tier === "pro") return PRO_DURATION_SEC;
@@ -53,18 +80,39 @@ function durationForUser(user: Express.User | undefined): number {
   return FREE_DURATION_SEC;
 }
 
-// Returns true if the user is under quota (or anonymous — anonymous traffic is
-// gated by the IP rate limiter, not this function). On 'over quota', writes a
-// 429 response itself so callers can simply `return` without further action.
-async function requireQuota(req: express.Request, res: express.Response): Promise<boolean> {
+// Admission gate run before enqueue. Returns true if the request can be
+// queued; writes the appropriate 4xx/5xx response and returns false otherwise.
+// Anonymous traffic skips the per-user checks (their cap is the IP rate limit
+// + client-side credits) but still respects the global queue cap.
+async function admitJob(
+  req: express.Request,
+  res: express.Response,
+): Promise<boolean> {
   if (IS_DEV) return true;
+  const depth = await queuedDepth();
+  if (depth >= GLOBAL_QUEUE_CAP) {
+    res.status(503).json({ error: "지금 생성 요청이 너무 많아요. 잠시 후 다시 시도해주세요." });
+    return false;
+  }
   const user = req.user;
   if (!user) return true;
-  const usage = await readUsage(user.id, user.tier);
-  if (usage.limit !== null && usage.used >= usage.limit) {
+  const limit = TIER_LIMIT[user.tier];
+  const windowMs = TIER_WINDOW_MS[user.tier] ?? TIER_WINDOW_MS.free;
+  if (limit !== null) {
+    const usedPlusInFlight = await countUsedPlusInFlight(user.id, windowMs);
+    if (usedPlusInFlight >= limit) {
+      const usage = await readUsage(user.id, user.tier);
+      res.status(429).json({
+        error: `${usage.periodLabel} 한도(${limit})를 모두 사용했어요.`,
+        usage,
+      });
+      return false;
+    }
+  }
+  const inFlight = await inFlightCountForUser(user.id);
+  if (inFlight >= PER_USER_INFLIGHT_CAP) {
     res.status(429).json({
-      error: `${usage.periodLabel} 한도(${usage.limit})를 모두 사용했어요.`,
-      usage,
+      error: `이미 ${PER_USER_INFLIGHT_CAP}개의 생성이 진행 중이에요. 완료된 후 다시 시도해주세요.`,
     });
     return false;
   }
@@ -82,9 +130,17 @@ const generateLimiter = rateLimit({
   skip: () => IS_DEV,
 });
 
-function audioUrl(filename: string): string {
-  return `http://localhost:${PORT}/audio/${filename}`;
-}
+// Per-IP cap on the poll endpoint. Honest polling is once per 2s per job; this
+// gives plenty of headroom for multiple concurrent polls while stopping a
+// single client from running a tight CPU-burn loop against us.
+const jobPollLimiter = rateLimit({
+  windowMs: 1_000,
+  limit: 30,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "요청이 너무 많아요. 잠시 후 다시 시도해주세요." },
+  skip: () => IS_DEV,
+});
 
 const app = express();
 app.use(cors({ origin: "http://localhost:5173", credentials: true }));
@@ -120,37 +176,19 @@ app.post("/api/generate", generateLimiter, async (req, res) => {
     res.status(400).json({ error: "lang must be KO or EN" });
     return;
   }
-  if (!(await requireQuota(req, res))) return;
+  if (!(await admitJob(req, res))) return;
 
   try {
-    let caption = prompt.trim();
-    let translatedCaption: string | undefined;
-    if (lang === "KO") {
-      translatedCaption = await translateKoreanToEnglish(caption);
-      caption = translatedCaption;
-    }
-    console.log(`[generate] caption: "${caption}"`);
-
-    const paths = await runAceStep({
-      task: "text2music",
-      caption,
+    const payload: GeneratePayload = {
+      prompt: prompt.trim(),
+      lang,
       durationSec: durationForUser(req.user),
-    });
-    const filenames = await processAudio(paths);
-
-    const songs = filenames.map((filename, i) => ({
-      id: `${Date.now()}-${i}`,
-      audioUrl: audioUrl(filename),
-      prompt,
-      ...(translatedCaption !== undefined && { translatedCaption }),
-    }));
-
-    if (req.user) await logUsage(req.user.id, "generate");
-    res.json({ songs });
+    };
+    const jobId = await enqueue(req.user?.id ?? null, "generate", payload);
+    res.status(202).json({ jobId });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[generate] error:", message);
-    res.status(500).json({ error: "generation failed" });
+    console.error("[generate] enqueue error:", err instanceof Error ? err.message : err);
+    res.status(500).json({ error: "enqueue failed" });
   }
 });
 
@@ -175,36 +213,22 @@ app.post("/api/repaint", requireAuth, async (req, res) => {
     res.status(400).json({ error: `caption must be ${MAX_PROMPT_CHARS} characters or fewer` });
     return;
   }
-  if (!(await requireQuota(req, res))) return;
+  if (!(await admitJob(req, res))) return;
 
   try {
-    const source = await prepareSourceForAceStep(sourceAudioUrl);
-    const captionStr = typeof caption === "string" ? caption.trim() : "";
-    console.log(`[repaint] ${startSec}s–${endSec}s caption="${captionStr}" src=${source.path}`);
-
-    const paths = await runAceStep({
-      task: "repaint",
-      caption: captionStr,
-      durationSec: durationForUser(req.user),
-      source,
+    const payload: RepaintPayload = {
+      sourceAudioUrl,
       startSec,
       endSec,
-    });
-    const filenames = await processAudio(paths);
-
-    const songs = filenames.map((filename, i) => ({
-      id: `${Date.now()}-${i}`,
-      audioUrl: audioUrl(filename),
-      prompt: captionStr || "부분 수정",
+      caption: typeof caption === "string" ? caption.trim() : "",
       ...(typeof parentSongId === "string" && { parentSongId }),
-    }));
-
-    if (req.user) await logUsage(req.user.id, "repaint");
-    res.json({ songs });
+      durationSec: durationForUser(req.user),
+    };
+    const jobId = await enqueue(req.user?.id ?? null, "repaint", payload);
+    res.status(202).json({ jobId });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[repaint] error:", message);
-    res.status(500).json({ error: "repaint failed" });
+    console.error("[repaint] enqueue error:", err instanceof Error ? err.message : err);
+    res.status(500).json({ error: "enqueue failed" });
   }
 });
 
@@ -232,42 +256,65 @@ app.post("/api/lego", requireAuth, async (req, res) => {
     res.status(400).json({ error: `caption must be ${MAX_PROMPT_CHARS} characters or fewer` });
     return;
   }
-  if (!(await requireQuota(req, res))) return;
+  if (!(await admitJob(req, res))) return;
 
   try {
-    const source = await prepareSourceForAceStep(sourceAudioUrl);
     const englishInstruments = (instruments as string[]).map(
       (ko) => KO_TO_EN_INSTRUMENTS[ko] ?? ko,
     );
-    const captionStr = typeof caption === "string" ? caption.trim() : "";
-    const fullCaption = captionStr
-      ? `add ${englishInstruments.join(", ")}, ${captionStr}`
-      : `add ${englishInstruments.join(", ")}`;
-    console.log(`[lego] caption="${fullCaption}" src=${source.path}`);
-
-    const paths = await runAceStep({
-      task: "lego",
-      caption: fullCaption,
-      durationSec: durationForUser(req.user),
-      source,
-    });
-    const filenames = await processAudio(paths);
-
-    const songs = filenames.map((filename, i) => ({
-      id: `${Date.now()}-${i}`,
-      audioUrl: audioUrl(filename),
-      prompt: fullCaption,
+    const payload: LegoPayload = {
+      sourceAudioUrl,
+      instruments: englishInstruments,
+      caption: typeof caption === "string" ? caption.trim() : "",
       ...(typeof parentSongId === "string" && { parentSongId }),
-    }));
-
-    if (req.user) await logUsage(req.user.id, "lego");
-    res.json({ songs });
+      durationSec: durationForUser(req.user),
+    };
+    const jobId = await enqueue(req.user?.id ?? null, "lego", payload);
+    res.status(202).json({ jobId });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[lego] error:", message);
-    res.status(500).json({ error: "lego failed" });
+    console.error("[lego] enqueue error:", err instanceof Error ? err.message : err);
+    res.status(500).json({ error: "enqueue failed" });
   }
 });
+
+// Polling endpoint. Anon callers pass no session and only match jobs they
+// enqueued anonymously (jobId acts as the ownership token, 96 bits of entropy).
+// Authed callers only match their own jobs.
+app.get("/api/jobs/:id", jobPollLimiter, async (req, res) => {
+  const jobId = String(req.params.id ?? "");
+  // Tight regex matches the minter's exact output (24 hex chars from
+  // crypto.randomBytes(12)). Looser patterns aren't exploitable thanks to
+  // parameterized queries, but a precise check fails malformed requests
+  // before they touch the DB.
+  if (!/^[a-f0-9]{24}$/.test(jobId)) {
+    res.status(400).json({ error: "invalid jobId" });
+    return;
+  }
+  try {
+    const view = await getJob(jobId, req.user?.id ?? null);
+    if (!view) {
+      res.status(404).json({ error: "job not found" });
+      return;
+    }
+    res.json(view);
+  } catch (err) {
+    console.error("[jobs] poll error:", err instanceof Error ? err.message : err);
+    res.status(500).json({ error: "job lookup failed" });
+  }
+});
+
+// Boot-time recovery + worker start. Wrapped in try/catch so a missing
+// Supabase config (auth-disabled mode) doesn't crash the server — the worker
+// just stays offline until env is fixed.
+void (async () => {
+  try {
+    const stale = await recoverStaleRunning();
+    if (stale > 0) console.log(`[jobs] cleared ${stale} stale running job(s) from prior process`);
+    startWorker();
+  } catch (err) {
+    console.warn("[jobs] worker disabled —", err instanceof Error ? err.message : err);
+  }
+})();
 
 app.listen(PORT, () => {
   console.log(`Mousike server on :${PORT}`);

@@ -1,6 +1,7 @@
 import type { Generation } from "./types";
 
 const BACKEND_URL = "http://localhost:8787";
+const POLL_INTERVAL_MS = 2_000;
 
 export interface BackendSong {
   id: string;
@@ -15,19 +16,76 @@ export interface BackendResponse {
 
 export type Lang = "KO" | "EN";
 
-export async function generate(prompt: string, lang: Lang): Promise<BackendSong[]> {
-  const res = await fetch(`${BACKEND_URL}/api/generate`, {
+export type JobStatus = "queued" | "running" | "done" | "failed";
+
+export interface JobView {
+  id: string;
+  kind: "generate" | "repaint" | "lego";
+  status: JobStatus;
+  queuePosition?: number;
+  result?: BackendResponse;
+  error?: string;
+  createdAt: string;
+}
+
+export interface JobProgress {
+  status: JobStatus;
+  queuePosition?: number;
+}
+
+export type ProgressCallback = (p: JobProgress) => void;
+
+async function enqueueJob(
+  endpoint: "generate" | "repaint" | "lego",
+  body: unknown,
+): Promise<string> {
+  const res = await fetch(`${BACKEND_URL}/api/${endpoint}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ prompt, lang }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error ?? `Backend error ${res.status}`);
   }
-  const data = (await res.json()) as BackendResponse;
-  return data.songs;
+  const data = (await res.json()) as { jobId: string };
+  return data.jobId;
+}
+
+async function fetchJob(jobId: string): Promise<JobView> {
+  const res = await fetch(`${BACKEND_URL}/api/jobs/${jobId}`, { credentials: "include" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? `Backend error ${res.status}`);
+  }
+  return (await res.json()) as JobView;
+}
+
+// Poll until the job finishes. onProgress fires once per poll with the latest
+// status + queue position so the caller can drive UI. Failed/missing jobs
+// throw; the caller surfaces an error toast.
+async function pollJob(jobId: string, onProgress?: ProgressCallback): Promise<BackendSong[]> {
+  while (true) {
+    const view = await fetchJob(jobId);
+    onProgress?.({ status: view.status, queuePosition: view.queuePosition });
+    if (view.status === "done") {
+      return view.result?.songs ?? [];
+    }
+    if (view.status === "failed") {
+      throw new Error(view.error ?? "생성에 실패했어요");
+    }
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+  }
+}
+
+export async function generate(
+  prompt: string,
+  lang: Lang,
+  onProgress?: ProgressCallback,
+): Promise<BackendSong[]> {
+  const jobId = await enqueueJob("generate", { prompt, lang });
+  return pollJob(jobId, onProgress);
 }
 
 export async function repaint(args: {
@@ -36,19 +94,11 @@ export async function repaint(args: {
   endSec: number;
   caption?: string;
   parentSongId?: string;
+  onProgress?: ProgressCallback;
 }): Promise<BackendSong[]> {
-  const res = await fetch(`${BACKEND_URL}/api/repaint`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify(args),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error ?? `Backend error ${res.status}`);
-  }
-  const data = (await res.json()) as BackendResponse;
-  return data.songs;
+  const { onProgress, ...body } = args;
+  const jobId = await enqueueJob("repaint", body);
+  return pollJob(jobId, onProgress);
 }
 
 interface RawGeneration extends Omit<Generation, "createdAt" | "songs"> {
@@ -124,17 +174,9 @@ export async function lego(args: {
   instruments: string[];
   caption?: string;
   parentSongId?: string;
+  onProgress?: ProgressCallback;
 }): Promise<BackendSong[]> {
-  const res = await fetch(`${BACKEND_URL}/api/lego`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify(args),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error ?? `Backend error ${res.status}`);
-  }
-  const data = (await res.json()) as BackendResponse;
-  return data.songs;
+  const { onProgress, ...body } = args;
+  const jobId = await enqueueJob("lego", body);
+  return pollJob(jobId, onProgress);
 }

@@ -275,7 +275,18 @@ export function App() {
     }, LOADING_MSG_INTERVAL_MS);
 
     try {
-      const backendSongs = await apiGenerate(promptText, lang as Lang);
+      const backendSongs = await apiGenerate(promptText, lang as Lang, (p) => {
+        // First real status from the server wins over the canned rotation —
+        // a queue position is more informative than "분위기를 잡는 중…".
+        if (p.status === "queued") {
+          window.clearInterval(msgInterval);
+          const ahead = (p.queuePosition ?? 1) - 1;
+          setLoadingMsg(ahead > 0 ? `${ahead}명 앞에 대기 중…` : "곧 시작합니다…");
+        } else if (p.status === "running") {
+          window.clearInterval(msgInterval);
+          setLoadingMsg("곡을 만드는 중…");
+        }
+      });
       const newGen = makeGeneration({
         prompt: promptText,
         parentGenId: opts.parentGenId ?? null,
