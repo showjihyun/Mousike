@@ -11,6 +11,7 @@ interface TopbarProps {
   user: AuthUser | null;
   onLogin: () => void;
   onLogout: () => void;
+  onUpgrade: () => void;
 }
 
 function UsageChip({ usage }: { usage: Usage }) {
@@ -33,7 +34,7 @@ function UsageChip({ usage }: { usage: Usage }) {
   );
 }
 
-export function Topbar({ page, onPage, usage, onHome, user, onLogin, onLogout }: TopbarProps) {
+export function Topbar({ page, onPage, usage, onHome, user, onLogin, onLogout, onUpgrade }: TopbarProps) {
   return (
     <div className="topbar">
       <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
@@ -64,7 +65,7 @@ export function Topbar({ page, onPage, usage, onHome, user, onLogin, onLogout }:
         ) : (
           <button className="btn-ghost" onClick={onLogin}>로그인</button>
         )}
-        <button className="btn-primary" onClick={() => alert("플랜 페이지는 별도 작업으로!")}>업그레이드</button>
+        <button className="btn-primary" onClick={onUpgrade}>업그레이드</button>
       </div>
     </div>
   );

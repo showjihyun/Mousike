@@ -1396,3 +1396,71 @@ input, textarea {
   background: var(--mou-ink);
   color: white;
 }
+
+.upgrade-card { max-width: 720px; }
+.plan-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.plan-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-large);
+  background: white;
+}
+.plan-col-highlight {
+  border-color: var(--notion-blue);
+  box-shadow: 0 4px 16px rgba(45,113,232,0.10);
+}
+.plan-col-current {
+  background: var(--bg-alt);
+}
+.plan-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.plan-name {
+  font-weight: var(--fw-semibold);
+  font-size: 15px;
+  color: var(--fg);
+}
+.plan-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--mou-ink);
+  color: white;
+  font-weight: var(--fw-medium);
+}
+.plan-price {
+  font-size: 13px;
+  color: var(--fg-secondary);
+  font-weight: var(--fw-medium);
+}
+.plan-features {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.plan-features li {
+  font-size: 13px;
+  color: var(--fg);
+  padding-left: 14px;
+  position: relative;
+}
+.plan-features li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  color: var(--notion-blue);
+  font-weight: var(--fw-semibold);
+}

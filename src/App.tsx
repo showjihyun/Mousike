@@ -18,6 +18,7 @@ import {
 import { type AuthUser, fetchCurrentUser, goToLogin, logout as apiLogout } from "./auth";
 import { LegoModal } from "./components/LegoModal";
 import { LoginModal } from "./components/LoginModal";
+import { UpgradeModal } from "./components/UpgradeModal";
 import { MiniPlayer } from "./components/MiniPlayer";
 import { RepaintModal } from "./components/RepaintModal";
 import type { SongAction } from "./components/SongCard";
@@ -96,6 +97,7 @@ export function App() {
   // Auth: null = not loaded yet OR anonymous. Fetched once on mount.
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loginPromptReason, setLoginPromptReason] = useState<string | null>(null);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
 
   // Server-truth usage for logged-in users. Anonymous users keep the client-only
   // 3/day cap via `credits`/localStorage below.
@@ -570,6 +572,7 @@ export function App() {
           setCredits(loadCredits() ?? 3);
           setUser(null);
         }}
+        onUpgrade={() => setUpgradeOpen(true)}
       />
 
       <div className="main">
@@ -659,6 +662,13 @@ export function App() {
         <LoginModal
           reason={loginPromptReason}
           onClose={() => setLoginPromptReason(null)}
+        />
+      )}
+
+      {upgradeOpen && (
+        <UpgradeModal
+          currentTier={user?.tier ?? null}
+          onClose={() => setUpgradeOpen(false)}
         />
       )}
     </div>
