@@ -4,6 +4,7 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { mountAuth, requireAuth } from "./auth.js";
 import { mountApi } from "./api.js";
+import { mountBilling } from "./billing.js";
 import { readUsage } from "./quota.js";
 import {
   enqueue,
@@ -150,6 +151,7 @@ app.use("/audio", express.static(AUDIO_CACHE_DIR));
 try {
   mountAuth(app);
   mountApi(app);
+  mountBilling(app);
 } catch (err) {
   // Missing env vars: keep the server running so the free-tier flow still works,
   // but /auth/* and /api/{generations,songs,credits,download,usage,cert} will
