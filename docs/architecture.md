@@ -250,17 +250,18 @@ to the file (DB just holds the audio_url string).
 
 ## 8. Tier policy
 
-| Tier     | Sample length | Watermark | Quota (rolling)  | Cert PDF | Notes               |
-|----------|---------------|-----------|------------------|----------|---------------------|
-| anonymous| 30s           | yes       | 10 req/h per IP  | no       | client-only counter |
-| free     | 30s           | yes       | 3 / 24h          | yes      | server-enforced     |
-| starter  | 90s           | no        | 30 / 30d         | yes      |                     |
-| pro      | 90s           | no        | unlimited        | yes      |                     |
+| Tier     | Track length | Watermark | Quota (rolling)  | Cert PDF | Notes               |
+|----------|--------------|-----------|------------------|----------|---------------------|
+| anonymous| 30s          | yes       | 10 req/h per IP  | no       | client-only counter |
+| free     | 30s          | yes       | 3 / 24h          | yes      | server-enforced     |
+| starter  | 90s          | no        | 30 / 30d         | yes      |                     |
+| pro      | 3min         | no        | unlimited        | yes      | full track          |
 
 Tier is set by `update users set tier = 'starter'` for now — no Toss
 integration yet. Tier widths and durations are defined in code, not DB
 config:
-- `FREE_DURATION_SEC` / `PAID_DURATION_SEC` in `server/index.ts`
+- `FREE_DURATION_SEC` / `STARTER_DURATION_SEC` / `PRO_DURATION_SEC`
+  in `server/index.ts`
 - `TIER_RULES` in `server/quota.ts`
 
 ## 9. Known issues / future improvements

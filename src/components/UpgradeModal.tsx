@@ -29,9 +29,8 @@ const PLANS: Plan[] = [
     id: "starter",
     name: "Starter",
     price: "₩9,900 / 월",
-    highlight: true,
     features: [
-      "90초 풀 트랙",
+      "90초 샘플 트랙",
       "한 달 30곡 생성",
       "워터마크 없음",
       "저작권 인증서 발급",
@@ -41,8 +40,9 @@ const PLANS: Plan[] = [
     id: "pro",
     name: "Pro",
     price: "₩29,000 / 월",
+    highlight: true,
     features: [
-      "90초 풀 트랙",
+      "3분 풀 트랙",
       "무제한 생성",
       "워터마크 없음",
       "저작권 인증서 발급",

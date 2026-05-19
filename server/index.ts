@@ -11,7 +11,8 @@ import { AUDIO_CACHE_DIR, prepareSourceForAceStep, processAudio } from "./audio.
 
 const PORT = 8787;
 const FREE_DURATION_SEC = 30;
-const PAID_DURATION_SEC = 90;
+const STARTER_DURATION_SEC = 90;
+const PRO_DURATION_SEC = 180;
 
 const KO_TO_EN_INSTRUMENTS: Record<string, string> = {
   // 기본
@@ -34,9 +35,9 @@ const KO_TO_EN_INSTRUMENTS: Record<string, string> = {
 
 function durationForUser(user: Express.User | undefined): number {
   if (!user) return FREE_DURATION_SEC;
-  return user.tier === "starter" || user.tier === "pro"
-    ? PAID_DURATION_SEC
-    : FREE_DURATION_SEC;
+  if (user.tier === "pro") return PRO_DURATION_SEC;
+  if (user.tier === "starter") return STARTER_DURATION_SEC;
+  return FREE_DURATION_SEC;
 }
 
 // Returns true if the user is under quota (or anonymous — anonymous traffic is

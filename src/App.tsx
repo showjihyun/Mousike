@@ -555,7 +555,13 @@ export function App() {
   }
 
   const playingSong = playingId ? findSong(playingId) : null;
-  const songLengthSec = user?.tier === "starter" || user?.tier === "pro" ? 90 : 30;
+
+  // Mirror server/index.ts:durationForUser. Pro gets 3-minute full tracks;
+  // starter sits at the 90s sample length; free + anonymous get the 30s sample.
+  const songLengthSec = user?.tier === "pro" ? 180 : user?.tier === "starter" ? 90 : 30;
+  const songLengthLabel = songLengthSec >= 120
+    ? `${Math.floor(songLengthSec / 60)}분`
+    : `${songLengthSec}초`;
 
   return (
     <div className="app" data-screen-label={page === "home" ? "01 Home" : "02 Library"}>
@@ -600,7 +606,7 @@ export function App() {
               onAction={handleAction}
               onVariation={handleVariation}
               findSong={findSong}
-              songLengthSec={songLengthSec}
+              songLengthLabel={songLengthLabel}
             />
           )}
           {page === "library" && (
