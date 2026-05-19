@@ -1478,3 +1478,39 @@ input, textarea {
   width: 100%;
 }
 .plan-buy:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.receipt-form {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.receipt-type-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.receipt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.receipt-chip input { display: none; }
+.receipt-chip:hover { border-color: var(--mou-ink); color: var(--fg); }
+.receipt-chip.selected {
+  border-color: var(--mou-ink);
+  background: var(--mou-ink);
+  color: white;
+}
+.receipt-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}

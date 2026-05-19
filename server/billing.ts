@@ -29,12 +29,27 @@ const TIER_LABEL: Record<PaidTier, string> = {
 const ACCESS_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const TOSS_CONFIRM_URL = "https://api.tosspayments.com/v1/payments/confirm";
 
+type ReceiptType = "소득공제" | "지출증빙";
+
 interface PaymentRow {
   id: string;
   user_id: string;
   tier: PaidTier;
   amount_krw: number;
   status: "pending" | "paid" | "failed" | "refunded";
+  receipt_type: ReceiptType | null;
+  receipt_registration_no: string | null;
+  receipt_email: string | null;
+}
+
+function isReceiptType(v: unknown): v is ReceiptType {
+  return v === "소득공제" || v === "지출증빙";
+}
+
+// 휴대폰 (11d) for 소득공제, 사업자등록번호 (10d) for 지출증빙. Allow 10-13
+// digits to leave room for either with or without hyphens stripped client-side.
+function isRegistrationNo(v: unknown): v is string {
+  return typeof v === "string" && /^\d{10,13}$/.test(v);
 }
 
 function mintOrderId(): string {
@@ -57,17 +72,20 @@ export function mountBilling(app: Express): void {
   });
 
   app.post("/api/billing/checkout", requireAuth, async (req, res) => {
-    const { tier, businessNo, receiptEmail } = req.body as {
+    const { tier, receiptType, registrationNo, receiptEmail } = req.body as {
       tier?: unknown;
-      businessNo?: unknown;
+      receiptType?: unknown;
+      registrationNo?: unknown;
       receiptEmail?: unknown;
     };
     if (!isPaidTier(tier)) {
       res.status(400).json({ error: "tier must be 'starter' or 'pro'" });
       return;
     }
-    if (businessNo != null && (typeof businessNo !== "string" || businessNo.length > 20)) {
-      res.status(400).json({ error: "businessNo invalid" });
+    // Receipt is optional — either fully provided (type + reg no) or omitted.
+    const wantsReceipt = receiptType != null || registrationNo != null;
+    if (wantsReceipt && !(isReceiptType(receiptType) && isRegistrationNo(registrationNo))) {
+      res.status(400).json({ error: "receiptType + registrationNo must be valid" });
       return;
     }
     if (receiptEmail != null && (typeof receiptEmail !== "string" || receiptEmail.length > 254)) {
@@ -86,7 +104,8 @@ export function mountBilling(app: Express): void {
         tier,
         amount_krw: amount,
         status: "pending",
-        receipt_business_no: typeof businessNo === "string" ? businessNo : null,
+        receipt_type: wantsReceipt ? (receiptType as ReceiptType) : null,
+        receipt_registration_no: wantsReceipt ? (registrationNo as string) : null,
         receipt_email: typeof receiptEmail === "string" ? receiptEmail : null,
       });
       if (error) throw error;
@@ -119,7 +138,7 @@ export function mountBilling(app: Express): void {
       const sb = getSupabase();
       const { data, error } = await sb
         .from("payments")
-        .select("id, user_id, tier, amount_krw, status")
+        .select("id, user_id, tier, amount_krw, status, receipt_type, receipt_registration_no, receipt_email")
         .eq("id", orderId)
         .eq("user_id", user.id)
         .maybeSingle();
@@ -153,13 +172,20 @@ export function mountBilling(app: Express): void {
         return;
       }
       const auth = Buffer.from(`${secretKey}:`).toString("base64");
+      const confirmBody: Record<string, unknown> = { paymentKey, orderId, amount };
+      if (row.receipt_type && row.receipt_registration_no) {
+        confirmBody.cashReceipt = {
+          type: row.receipt_type,
+          registrationNumber: row.receipt_registration_no,
+        };
+      }
       const tossRes = await fetch(TOSS_CONFIRM_URL, {
         method: "POST",
         headers: {
           Authorization: `Basic ${auth}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ paymentKey, orderId, amount }),
+        body: JSON.stringify(confirmBody),
         signal: AbortSignal.timeout(15_000),
       });
 

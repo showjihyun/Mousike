@@ -158,9 +158,12 @@ export async function fetchBillingConfig(): Promise<{ clientKey: string }> {
   return (await res.json()) as { clientKey: string };
 }
 
+export type ReceiptType = "소득공제" | "지출증빙";
+
 export async function postCheckout(args: {
   tier: "starter" | "pro";
-  businessNo?: string;
+  receiptType?: ReceiptType;
+  registrationNo?: string;
   receiptEmail?: string;
 }): Promise<CheckoutResponse> {
   const res = await fetch(`${BACKEND_URL}/api/billing/checkout`, {

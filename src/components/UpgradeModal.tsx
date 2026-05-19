@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Tier } from "../auth";
+import type { ReceiptType } from "../api";
 import { startCheckout } from "../billing";
 
 interface UpgradeModalProps {
@@ -58,6 +59,10 @@ const PLANS: Plan[] = [
 
 export function UpgradeModal({ currentTier, loggedIn, onClose, onRequireLogin, onError }: UpgradeModalProps) {
   const [busyTier, setBusyTier] = useState<"starter" | "pro" | null>(null);
+  // Receipt form state. Empty receiptType = "no receipt".
+  const [receiptType, setReceiptType] = useState<ReceiptType | "">("");
+  const [registrationNo, setRegistrationNo] = useState("");
+  const [receiptEmail, setReceiptEmail] = useState("");
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busyTier) onClose(); };
@@ -65,17 +70,27 @@ export function UpgradeModal({ currentTier, loggedIn, onClose, onRequireLogin, o
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose, busyTier]);
 
+  function digitsOnly(s: string): string {
+    return s.replace(/\D/g, "");
+  }
+
   async function handleBuy(tier: "starter" | "pro") {
     if (!loggedIn) {
       onRequireLogin();
       return;
     }
+    if (receiptType && !/^\d{10,13}$/.test(registrationNo)) {
+      const expected = receiptType === "소득공제" ? "휴대폰번호 (11자리)" : "사업자등록번호 (10자리)";
+      onError(`영수증 발급은 ${expected}가 필요해요.`);
+      return;
+    }
     setBusyTier(tier);
     try {
-      // startCheckout redirects to Toss on success and never resolves;
-      // catch is only entered if the SDK rejects (user closes the modal,
-      // network error, missing keys).
-      await startCheckout({ tier });
+      await startCheckout({
+        tier,
+        ...(receiptType && { receiptType, registrationNo }),
+        ...(receiptEmail && { receiptEmail }),
+      });
     } catch (e) {
       const message = e instanceof Error ? e.message : "결제를 시작하지 못했어요";
       // Toss SDK rejects user-cancellation with a specific code — silence
@@ -130,6 +145,62 @@ export function UpgradeModal({ currentTier, loggedIn, onClose, onRequireLogin, o
                 </div>
               );
             })}
+          </div>
+
+          <div className="receipt-form">
+            <div className="modal-label" style={{ marginBottom: 6 }}>현금영수증 (선택)</div>
+            <div className="receipt-type-row">
+              <label className={`receipt-chip ${receiptType === "" ? "selected" : ""}`}>
+                <input
+                  type="radio"
+                  name="receiptType"
+                  checked={receiptType === ""}
+                  onChange={() => { setReceiptType(""); setRegistrationNo(""); }}
+                />
+                발급 안 함
+              </label>
+              <label className={`receipt-chip ${receiptType === "소득공제" ? "selected" : ""}`}>
+                <input
+                  type="radio"
+                  name="receiptType"
+                  checked={receiptType === "소득공제"}
+                  onChange={() => { setReceiptType("소득공제"); setRegistrationNo(""); }}
+                />
+                개인 (소득공제)
+              </label>
+              <label className={`receipt-chip ${receiptType === "지출증빙" ? "selected" : ""}`}>
+                <input
+                  type="radio"
+                  name="receiptType"
+                  checked={receiptType === "지출증빙"}
+                  onChange={() => { setReceiptType("지출증빙"); setRegistrationNo(""); }}
+                />
+                사업자 (지출증빙)
+              </label>
+            </div>
+            {receiptType && (
+              <div className="receipt-fields">
+                <input
+                  className="modal-input"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder={receiptType === "소득공제" ? "휴대폰번호 (- 없이)" : "사업자등록번호 (- 없이)"}
+                  value={registrationNo}
+                  onChange={(e) => setRegistrationNo(digitsOnly(e.target.value))}
+                  maxLength={13}
+                  disabled={busyTier !== null}
+                />
+                <input
+                  className="modal-input"
+                  type="email"
+                  placeholder="영수증 발송 이메일 (선택)"
+                  value={receiptEmail}
+                  onChange={(e) => setReceiptEmail(e.target.value)}
+                  maxLength={254}
+                  disabled={busyTier !== null}
+                />
+              </div>
+            )}
           </div>
         </div>
         <div className="modal-footer">

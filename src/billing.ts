@@ -3,11 +3,12 @@
 // redirect the user. After payment the user lands back on /billing/success
 // (or /billing/fail) and App.tsx finishes the confirm round-trip.
 import { loadTossPayments } from "@tosspayments/payment-sdk";
-import { fetchBillingConfig, postCheckout } from "./api";
+import { fetchBillingConfig, postCheckout, type ReceiptType } from "./api";
 
 export async function startCheckout(args: {
   tier: "starter" | "pro";
-  businessNo?: string;
+  receiptType?: ReceiptType;
+  registrationNo?: string;
   receiptEmail?: string;
 }): Promise<void> {
   const [{ clientKey }, order] = await Promise.all([
