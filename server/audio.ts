@@ -5,7 +5,7 @@
 //                  don't get a doubled watermark).
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { existsSync, mkdirSync, promises as fsp } from "fs";
+import { mkdirSync, promises as fsp } from "fs";
 import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { mixWatermark } from "./watermark.js";
@@ -25,6 +25,15 @@ const GRADIO_UPLOAD_URL = "http://localhost:7860/gradio_api/upload";
 // security-load-bearing regex: do NOT loosen it without also revisiting
 // resolveAudioUrlToLocalPath, which uses path.join on the captured name.
 const SAFE_FILENAME = /^[A-Za-z0-9._-]+\.mp3$/;
+
+export async function fileExists(p: string): Promise<boolean> {
+  try {
+    await fsp.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // The ACE-Step source-audio param accepts a Gradio FileData with this shape.
 export interface GradioSource {
@@ -64,7 +73,7 @@ export async function processAudio(containerPaths: string[]): Promise<string[]> 
 // filename component against SAFE_FILENAME — without this, a request body
 // of "http://x/audio/../../etc/passwd" would resolve outside the audio dirs
 // and get uploaded to Gradio (auth'd arbitrary local-file read).
-function resolveAudioUrlToLocalPath(audioUrl: string): string {
+async function resolveAudioUrlToLocalPath(audioUrl: string): Promise<string> {
   const filename = audioUrl.split("/audio/")[1];
   if (!filename || !SAFE_FILENAME.test(filename)) {
     throw new Error(`invalid audio url: ${audioUrl}`);
@@ -73,7 +82,7 @@ function resolveAudioUrlToLocalPath(audioUrl: string): string {
   // cleanFilename derives from filename via a fixed-suffix replacement —
   // can't introduce traversal characters that weren't already there.
   const securePath = join(AUDIO_SECURE_DIR, cleanFilename);
-  if (existsSync(securePath)) return securePath;
+  if (await fileExists(securePath)) return securePath;
   return join(AUDIO_CACHE_DIR, filename);
 }
 
@@ -92,7 +101,7 @@ async function uploadFileToGradio(localPath: string): Promise<string> {
 // Combines the two steps callers always do back-to-back: resolve the local
 // path for a stored audioUrl, then hand it to Gradio so ACE-Step can read it.
 export async function prepareSourceForAceStep(audioUrl: string): Promise<GradioSource> {
-  const localPath = resolveAudioUrlToLocalPath(audioUrl);
+  const localPath = await resolveAudioUrlToLocalPath(audioUrl);
   const gradioPath = await uploadFileToGradio(localPath);
   return {
     path: gradioPath,
