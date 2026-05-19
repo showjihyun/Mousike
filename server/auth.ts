@@ -109,11 +109,32 @@ export function mountAuth(app: Express): void {
       // route the request touches.
       const { data, error } = await supabase
         .from("users")
-        .select("id, email, name, picture, tier")
+        .select("id, email, name, picture, tier, tier_expires_at")
         .eq("id", id)
         .maybeSingle();
       if (error) throw error;
-      done(null, (data as AuthUser | null) ?? false);
+      if (!data) {
+        done(null, false);
+        return;
+      }
+      const row = data as AuthUser & { tier_expires_at: string | null };
+      // Lazy expiry: a paid tier whose tier_expires_at is past flips back to
+      // 'free' here. Cheap because deserialize already round-trips the DB —
+      // no separate cron needed.
+      if (
+        (row.tier === "starter" || row.tier === "pro") &&
+        row.tier_expires_at &&
+        new Date(row.tier_expires_at).getTime() < Date.now()
+      ) {
+        await supabase
+          .from("users")
+          .update({ tier: "free", tier_expires_at: null })
+          .eq("id", id);
+        row.tier = "free";
+      }
+      const { tier_expires_at: _, ...user } = row;
+      void _;
+      done(null, user as AuthUser);
     } catch (err) {
       done(err as Error);
     }
