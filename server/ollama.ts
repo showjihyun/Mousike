@@ -7,6 +7,11 @@ const SYSTEM_PROMPT =
   "5-10 words. Output ONLY the English translation. No quotes, no " +
   "explanation, no extra words.";
 
+// Cold-start of gemma2:2b can take ~10s; pad for safety.
+const OLLAMA_TIMEOUT_MS = 30_000;
+// ACE-Step captions saturate well before this length; clip a runaway LLM.
+const MAX_CAPTION_CHARS = 500;
+
 export async function translateKoreanToEnglish(prompt: string): Promise<string> {
   const res = await fetch(OLLAMA_URL, {
     method: "POST",
@@ -18,8 +23,9 @@ export async function translateKoreanToEnglish(prompt: string): Promise<string> 
       prompt,
       options: { temperature: 0.3 },
     }),
+    signal: AbortSignal.timeout(OLLAMA_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`Ollama error: ${res.status}`);
   const data = (await res.json()) as { response: string };
-  return data.response.trim();
+  return data.response.trim().slice(0, MAX_CAPTION_CHARS);
 }

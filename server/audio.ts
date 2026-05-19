@@ -20,6 +20,12 @@ mkdirSync(AUDIO_SECURE_DIR, { recursive: true });
 
 const GRADIO_UPLOAD_URL = "http://localhost:7860/gradio_api/upload";
 
+// Audio filenames are server-minted from Date.now() + Math.random — the only
+// legal shapes are `<stem>.mp3` and `<stem>-wm.mp3`. SAFE_FILENAME is the
+// security-load-bearing regex: do NOT loosen it without also revisiting
+// resolveAudioUrlToLocalPath, which uses path.join on the captured name.
+const SAFE_FILENAME = /^[A-Za-z0-9._-]+\.mp3$/;
+
 // The ACE-Step source-audio param accepts a Gradio FileData with this shape.
 export interface GradioSource {
   path: string;
@@ -31,27 +37,41 @@ export interface GradioSource {
 // Copies the model output out of the ace-step container into audio-secure
 // as the clean file, then writes a watermarked sibling into audio-cache.
 // Returns the watermarked filename (X-wm.mp3) — that's what's stored on the
-// audioUrl returned to the client.
+// audioUrl returned to the client. If any step fails for a batch entry, both
+// the clean and (partial) watermarked file are removed so they don't orphan.
 export async function processAudio(containerPaths: string[]): Promise<string[]> {
   const watermarkedNames: string[] = [];
   for (const containerPath of containerPaths) {
     const stem = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const cleanPath = join(AUDIO_SECURE_DIR, `${stem}.mp3`);
     const watermarkedPath = join(AUDIO_CACHE_DIR, `${stem}-wm.mp3`);
-    await execFileAsync("docker", ["cp", `ace-step:${containerPath}`, cleanPath]);
-    await mixWatermark(cleanPath, watermarkedPath);
-    watermarkedNames.push(`${stem}-wm.mp3`);
+    try {
+      await execFileAsync("docker", ["cp", `ace-step:${containerPath}`, cleanPath]);
+      await mixWatermark(cleanPath, watermarkedPath);
+      watermarkedNames.push(`${stem}-wm.mp3`);
+    } catch (err) {
+      await fsp.unlink(cleanPath).catch(() => {});
+      await fsp.unlink(watermarkedPath).catch(() => {});
+      throw err;
+    }
   }
   return watermarkedNames;
 }
 
 // Repaint/lego accept an audioUrl that points at /audio/...-wm.mp3. We feed
 // ACE-Step the matching clean file from audio-secure if it exists, otherwise
-// fall back to audio-cache (pre-watermark legacy songs).
+// fall back to audio-cache (pre-watermark legacy songs). Validates the
+// filename component against SAFE_FILENAME — without this, a request body
+// of "http://x/audio/../../etc/passwd" would resolve outside the audio dirs
+// and get uploaded to Gradio (auth'd arbitrary local-file read).
 function resolveAudioUrlToLocalPath(audioUrl: string): string {
   const filename = audioUrl.split("/audio/")[1];
-  if (!filename) throw new Error(`Cannot resolve audio URL: ${audioUrl}`);
+  if (!filename || !SAFE_FILENAME.test(filename)) {
+    throw new Error(`invalid audio url: ${audioUrl}`);
+  }
   const cleanFilename = filename.replace(/-wm\.mp3$/, ".mp3");
+  // cleanFilename derives from filename via a fixed-suffix replacement —
+  // can't introduce traversal characters that weren't already there.
   const securePath = join(AUDIO_SECURE_DIR, cleanFilename);
   if (existsSync(securePath)) return securePath;
   return join(AUDIO_CACHE_DIR, filename);

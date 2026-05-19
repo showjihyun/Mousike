@@ -14,6 +14,12 @@ const FREE_DURATION_SEC = 30;
 const STARTER_DURATION_SEC = 90;
 const PRO_DURATION_SEC = 180;
 
+// Caps caller-supplied text fields so a 10MB prompt can't be forwarded to
+// Ollama → ACE-Step. express.json's 100KB default body limit also covers this,
+// but the explicit cap fails fast with a useful message.
+const MAX_PROMPT_CHARS = 500;
+const MAX_LEGO_INSTRUMENTS = 16;
+
 const KO_TO_EN_INSTRUMENTS: Record<string, string> = {
   // 기본
   기타: "electric guitar",
@@ -97,6 +103,10 @@ app.post("/api/generate", generateLimiter, async (req, res) => {
     res.status(400).json({ error: "prompt must be a non-empty string" });
     return;
   }
+  if (prompt.length > MAX_PROMPT_CHARS) {
+    res.status(400).json({ error: `prompt must be ${MAX_PROMPT_CHARS} characters or fewer` });
+    return;
+  }
   if (lang !== "KO" && lang !== "EN") {
     res.status(400).json({ error: "lang must be KO or EN" });
     return;
@@ -131,7 +141,7 @@ app.post("/api/generate", generateLimiter, async (req, res) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[generate] error:", message);
-    res.status(500).json({ error: message });
+    res.status(500).json({ error: "generation failed" });
   }
 });
 
@@ -150,6 +160,10 @@ app.post("/api/repaint", requireAuth, async (req, res) => {
   }
   if (typeof startSec !== "number" || typeof endSec !== "number" || startSec >= endSec) {
     res.status(400).json({ error: "startSec and endSec must be numbers with startSec < endSec" });
+    return;
+  }
+  if (typeof caption === "string" && caption.length > MAX_PROMPT_CHARS) {
+    res.status(400).json({ error: `caption must be ${MAX_PROMPT_CHARS} characters or fewer` });
     return;
   }
   if (!(await requireQuota(req, res))) return;
@@ -181,7 +195,7 @@ app.post("/api/repaint", requireAuth, async (req, res) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[repaint] error:", message);
-    res.status(500).json({ error: message });
+    res.status(500).json({ error: "repaint failed" });
   }
 });
 
@@ -199,6 +213,14 @@ app.post("/api/lego", requireAuth, async (req, res) => {
   }
   if (!Array.isArray(instruments) || instruments.length === 0) {
     res.status(400).json({ error: "instruments must be a non-empty array" });
+    return;
+  }
+  if (instruments.length > MAX_LEGO_INSTRUMENTS || !instruments.every((it) => typeof it === "string")) {
+    res.status(400).json({ error: "instruments must be 16 or fewer string entries" });
+    return;
+  }
+  if (typeof caption === "string" && caption.length > MAX_PROMPT_CHARS) {
+    res.status(400).json({ error: `caption must be ${MAX_PROMPT_CHARS} characters or fewer` });
     return;
   }
   if (!(await requireQuota(req, res))) return;
@@ -234,7 +256,7 @@ app.post("/api/lego", requireAuth, async (req, res) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[lego] error:", message);
-    res.status(500).json({ error: message });
+    res.status(500).json({ error: "lego failed" });
   }
 });
 

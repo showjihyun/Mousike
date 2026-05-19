@@ -17,13 +17,22 @@ const WATERMARK_PATH = join(__dirname, "assets", "watermark.mp3");
 const WATERMARK_VOLUME = 0.6;
 const END_LEAD_TIME_SEC = 2; // how close to the end the closing tag plays
 
+// 60s is a generous ceiling — a 3min mp3 mixes in under a second on a
+// modern laptop. The timeout protects against a wedged ffmpeg holding the
+// HTTP request open indefinitely.
+const CHILD_TIMEOUT_MS = 60_000;
+
 async function probeDurationSec(path: string): Promise<number> {
-  const { stdout } = await execFileAsync("ffprobe", [
-    "-v", "error",
-    "-show_entries", "format=duration",
-    "-of", "default=nw=1:nk=1",
-    path,
-  ]);
+  const { stdout } = await execFileAsync(
+    "ffprobe",
+    [
+      "-v", "error",
+      "-show_entries", "format=duration",
+      "-of", "default=nw=1:nk=1",
+      path,
+    ],
+    { timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL" },
+  );
   const d = Number(stdout.trim());
   if (!Number.isFinite(d) || d <= 0) throw new Error(`bad ffprobe duration for ${path}: ${stdout}`);
   return d;
@@ -42,13 +51,17 @@ export async function mixWatermark(cleanPath: string, outPath: string): Promise<
     `[1:a]volume=${WATERMARK_VOLUME},adelay=${endDelayMs}|${endDelayMs}[wmEnd];` +
     `[0:a][wmStart][wmEnd]amix=inputs=3:duration=first:dropout_transition=0`;
 
-  await execFileAsync("ffmpeg", [
-    "-y",
-    "-i", cleanPath,
-    "-i", WATERMARK_PATH,
-    "-filter_complex", filter,
-    "-c:a", "libmp3lame",
-    "-b:a", "192k",
-    outPath,
-  ]);
+  await execFileAsync(
+    "ffmpeg",
+    [
+      "-y",
+      "-i", cleanPath,
+      "-i", WATERMARK_PATH,
+      "-filter_complex", filter,
+      "-c:a", "libmp3lame",
+      "-b:a", "192k",
+      outPath,
+    ],
+    { timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL" },
+  );
 }

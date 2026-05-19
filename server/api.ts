@@ -45,25 +45,64 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// Log the real error server-side, hand the client a generic message.
+// Supabase + postgres errors otherwise leak schema and row details to anyone
+// who can hit the endpoint.
+function respondServerError(res: import("express").Response, label: string, err: unknown) {
+  console.error(`[${label}] error:`, errorMessage(err));
+  res.status(500).json({ error: `${label} failed` });
+}
+
+// Caller-supplied IDs are accepted (the schema is text-PK on purpose) but
+// must look like the timestamp+random stems we mint client-side. Without
+// this an attacker can plant rows under future-likely IDs to DoS another
+// user's first generation of the day.
+const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const STR_MAX = 500;
+const MAX_SONGS_PER_GEN = 8;
+const MAX_WAVEFORM_BARS = 256;
+const MAX_INSTRUMENTS = 16;
+// Same shape /audio/<safe>.mp3 — must round-trip safely through
+// audio.ts:resolveAudioUrlToLocalPath without picking up traversal chars.
+const AUDIO_URL_PATTERN = /^https?:\/\/[^/]+\/audio\/[A-Za-z0-9._-]+\.mp3$/;
+
+function isShortString(v: unknown): v is string {
+  return typeof v === "string" && v.length <= STR_MAX;
+}
+
+function isPalette(v: unknown): v is [string, string] {
+  return Array.isArray(v) && v.length === 2 && isShortString(v[0]) && isShortString(v[1]);
+}
+
 function validateGeneration(p: unknown): p is GenerationPayload {
   if (!p || typeof p !== "object") return false;
   const g = p as GenerationPayload;
-  return (
-    typeof g.id === "string" &&
-    typeof g.prompt === "string" &&
-    Array.isArray(g.palette) &&
-    g.palette.length === 2 &&
-    Array.isArray(g.songs) &&
-    g.songs.every(
-      (s) =>
-        typeof s?.id === "string" &&
-        typeof s.title === "string" &&
-        typeof s.bpm === "number" &&
-        typeof s.durationSec === "number" &&
-        Array.isArray(s.waveform) &&
-        Array.isArray(s.instruments) &&
-        Array.isArray(s.palette),
-    )
+  if (!ID_PATTERN.test(g.id ?? "")) return false;
+  if (!isShortString(g.prompt)) return false;
+  if (!isPalette(g.palette)) return false;
+  if (g.parentGenId != null && !ID_PATTERN.test(g.parentGenId)) return false;
+  if (g.parentSongId != null && !ID_PATTERN.test(g.parentSongId)) return false;
+  if (!Array.isArray(g.songs) || g.songs.length === 0 || g.songs.length > MAX_SONGS_PER_GEN) {
+    return false;
+  }
+  return g.songs.every(
+    (s) =>
+      s &&
+      ID_PATTERN.test(s.id ?? "") &&
+      isShortString(s.title) &&
+      isShortString(s.style) &&
+      isShortString(s.vibe) &&
+      isShortString(s.key) &&
+      isShortString(s.prompt) &&
+      typeof s.bpm === "number" && Number.isFinite(s.bpm) &&
+      typeof s.durationSec === "number" && Number.isFinite(s.durationSec) &&
+      typeof s.liked === "boolean" &&
+      Array.isArray(s.waveform) && s.waveform.length <= MAX_WAVEFORM_BARS
+        && s.waveform.every((n) => typeof n === "number" && Number.isFinite(n)) &&
+      Array.isArray(s.instruments) && s.instruments.length <= MAX_INSTRUMENTS
+        && s.instruments.every(isShortString) &&
+      isPalette(s.palette) &&
+      (s.audioUrl == null || (typeof s.audioUrl === "string" && AUDIO_URL_PATTERN.test(s.audioUrl))),
   );
 }
 
@@ -122,7 +161,7 @@ export function mountApi(app: Express): void {
       const rows = (data ?? []) as unknown as Record<string, unknown>[];
       res.json({ generations: rows.map(toClientGeneration) });
     } catch (err) {
-      res.status(500).json({ error: errorMessage(err) });
+      respondServerError(res, "GET /api/generations", err);
     }
   });
 
@@ -175,7 +214,7 @@ export function mountApi(app: Express): void {
 
       res.status(201).json({ ok: true });
     } catch (err) {
-      res.status(500).json({ error: errorMessage(err) });
+      respondServerError(res, "POST /api/generations", err);
     }
   });
 
@@ -190,7 +229,7 @@ export function mountApi(app: Express): void {
       if (error) throw error;
       res.status(204).end();
     } catch (err) {
-      res.status(500).json({ error: errorMessage(err) });
+      respondServerError(res, "DELETE /api/generations", err);
     }
   });
 
@@ -210,7 +249,7 @@ export function mountApi(app: Express): void {
       if (error) throw error;
       res.status(204).end();
     } catch (err) {
-      res.status(500).json({ error: errorMessage(err) });
+      respondServerError(res, "PATCH /api/songs", err);
     }
   });
 
@@ -220,44 +259,13 @@ export function mountApi(app: Express): void {
       const usage = await readUsage(u.id, u.tier);
       res.json(usage);
     } catch (err) {
-      res.status(500).json({ error: errorMessage(err) });
+      respondServerError(res, "GET /api/usage", err);
     }
   });
 
-  app.get("/api/credits", requireAuth, async (req, res) => {
-    try {
-      const sb = getSupabase();
-      const { data, error } = await sb
-        .from("credits")
-        .select("balance")
-        .eq("user_id", userId(req))
-        .maybeSingle();
-      if (error) throw error;
-      res.json({ balance: data?.balance ?? 0 });
-    } catch (err) {
-      res.status(500).json({ error: errorMessage(err) });
-    }
-  });
-
-  app.patch("/api/credits", requireAuth, async (req, res) => {
-    const { balance } = req.body as { balance?: unknown };
-    if (typeof balance !== "number" || !Number.isInteger(balance) || balance < 0) {
-      res.status(400).json({ error: "balance must be a non-negative integer" });
-      return;
-    }
-    try {
-      const sb = getSupabase();
-      const { error } = await sb.from("credits").upsert({
-        user_id: userId(req),
-        balance,
-        updated_at: new Date().toISOString(),
-      });
-      if (error) throw error;
-      res.status(204).end();
-    } catch (err) {
-      res.status(500).json({ error: errorMessage(err) });
-    }
-  });
+  // /api/credits removed — usage_log + readUsage is the source of truth.
+  // The PATCH let any authenticated user set their own balance, which would
+  // have been a footgun once anything actually depended on it.
 
   app.get("/api/cert/:songId", requireAuth, async (req, res) => {
     try {
@@ -286,15 +294,27 @@ export function mountApi(app: Express): void {
         "Content-Disposition",
         `attachment; filename="mousike-cert-${row.id}.pdf"`,
       );
-      renderCert(user, {
+      // Once we pipe, headers are committed and the response is in stream
+      // mode — any pdfkit error here can't be turned into a 500. Kill the
+      // socket so the client sees an aborted request instead of a silently
+      // truncated "PDF".
+      const stream = renderCert(user, {
         id: row.id,
         title: row.title,
         prompt: row.prompt,
         audioUrl: row.audio_url,
         createdAt: new Date(row.created_at),
-      }).pipe(res);
+      });
+      stream.on("error", (err: unknown) => {
+        console.error("[cert] stream error:", errorMessage(err));
+        res.destroy();
+      });
+      stream.pipe(res);
     } catch (err) {
-      res.status(500).json({ error: errorMessage(err) });
+      console.error("[cert] error:", errorMessage(err));
+      if (!res.headersSent) {
+        res.status(500).json({ error: "certificate render failed" });
+      }
     }
   });
 

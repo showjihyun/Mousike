@@ -9,6 +9,12 @@ import type { GradioSource } from "./audio.js";
 const ACE_STEP_URL = "http://localhost:7860/gradio_api/call/generation_wrapper";
 const BATCH_SIZE = 1;
 
+// Submit is a cheap POST that should return within seconds. SSE poll covers
+// the whole generation — Pro 3min songs need ~3min of GPU, so we allow 10min
+// before declaring the container hung.
+const SUBMIT_TIMEOUT_MS = 30_000;
+const SSE_TIMEOUT_MS = 10 * 60_000;
+
 export type AceStepRequest =
   | { task: "text2music"; caption: string; durationSec: number }
   | {
@@ -84,7 +90,9 @@ function buildPayload(req: AceStepRequest): unknown[] {
 }
 
 async function pollSse(eventId: string): Promise<string[]> {
-  const res = await fetch(`${ACE_STEP_URL}/${eventId}`);
+  const res = await fetch(`${ACE_STEP_URL}/${eventId}`, {
+    signal: AbortSignal.timeout(SSE_TIMEOUT_MS),
+  });
   if (!res.ok) throw new Error(`ACE-Step poll error: ${res.status}`);
   if (!res.body) throw new Error("No SSE body");
 
@@ -140,6 +148,7 @@ export async function runAceStep(req: AceStepRequest): Promise<string[]> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ data: buildPayload(req) }),
+    signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
   });
   if (!submitRes.ok) throw new Error(`ACE-Step submit error: ${submitRes.status}`);
   const { event_id } = (await submitRes.json()) as { event_id: string };

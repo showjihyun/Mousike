@@ -104,13 +104,16 @@ export function mountAuth(app: Express): void {
 
   passport.deserializeUser(async (id: string, done) => {
     try {
+      // maybeSingle so a session cookie that outlived its users row returns
+      // "no user" (logged-out) instead of throwing PGRST116 and 500-ing every
+      // route the request touches.
       const { data, error } = await supabase
         .from("users")
         .select("id, email, name, picture, tier")
         .eq("id", id)
-        .single();
+        .maybeSingle();
       if (error) throw error;
-      done(null, data as AuthUser);
+      done(null, (data as AuthUser | null) ?? false);
     } catch (err) {
       done(err as Error);
     }

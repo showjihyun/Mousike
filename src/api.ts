@@ -81,13 +81,6 @@ export async function postGeneration(gen: Generation): Promise<void> {
   if (!res.ok) throw new Error(`Backend error ${res.status}`);
 }
 
-export async function fetchCredits(): Promise<number> {
-  const res = await fetch(`${BACKEND_URL}/api/credits`, { credentials: "include" });
-  if (!res.ok) throw new Error(`Backend error ${res.status}`);
-  const data = (await res.json()) as { balance: number };
-  return data.balance;
-}
-
 export interface Usage {
   used: number;
   limit: number | null;
@@ -99,16 +92,6 @@ export async function fetchUsage(): Promise<Usage> {
   const res = await fetch(`${BACKEND_URL}/api/usage`, { credentials: "include" });
   if (!res.ok) throw new Error(`Backend error ${res.status}`);
   return (await res.json()) as Usage;
-}
-
-export async function patchCredits(balance: number): Promise<void> {
-  const res = await fetch(`${BACKEND_URL}/api/credits`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ balance }),
-  });
-  if (!res.ok) throw new Error(`Backend error ${res.status}`);
 }
 
 export async function downloadCertBlob(songId: string): Promise<Blob> {
