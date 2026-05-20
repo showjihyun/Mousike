@@ -1310,7 +1310,9 @@ input, textarea {
     grid-template-columns: 28px 1fr 60px 28px;
   }
   .lr-prompt, .lr-date { display: none; }
-  /* 44px touch targets on mobile (WCAG / Apple HIG minimum) */
+  /* 44px touch targets on mobile (WCAG / Apple HIG minimum).
+     white-space: nowrap stops 로그인/업그레이드/오늘 3/3 from wrapping
+     mid-character when the top-bar runs out of horizontal space. */
   .topright .btn-primary,
   .topright .btn-upgrade-top,
   .topright .btn-ghost,
@@ -1318,6 +1320,19 @@ input, textarea {
   .topright .user-chip,
   .lang-toggle {
     min-height: 44px;
+    white-space: nowrap;
+  }
+  /* Compact horizontal padding so 4 nowrap chips still fit at 375px. */
+  .topright {
+    gap: 6px;
+  }
+  .topright .btn-primary,
+  .topright .btn-upgrade-top,
+  .topright .btn-ghost {
+    padding: 7px 10px;
+  }
+  .topright .credit-pill {
+    padding: 5px 8px;
   }
 }
 
