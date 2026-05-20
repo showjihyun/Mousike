@@ -639,7 +639,6 @@ export function App() {
           }
         }}
         onUpgrade={() => setUpgradeOpen(true)}
-        onHelp={() => showToast("도움말은 아직 준비 중이에요!")}
       />
 
       <div className="main">
