@@ -1334,6 +1334,24 @@ input, textarea {
   .topright .credit-pill {
     padding: 5px 8px;
   }
+  /* F1: stack composer vertically so 곡 만들기 stays visible at 375px.
+     Desktop keeps the horizontal pill; mobile gets input on top and
+     KO/생성 controls on a row below, with the CTA growing to fill. */
+  .composer-box {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .composer-input {
+    padding: 14px 16px 4px;
+  }
+  .composer-actions {
+    padding: 8px 10px 10px;
+    justify-content: space-between;
+  }
+  .composer-actions .generate-btn {
+    flex: 1;
+    justify-content: center;
+  }
 }
 
 /* ============================================================
