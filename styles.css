@@ -125,6 +125,21 @@ input, textarea {
 .btn-primary:hover { background: var(--notion-blue-active); }
 .btn-primary:active { transform: scale(0.96); }
 
+/* Quieter variant used by the top-bar 업그레이드 button. Brand-tinted
+   instead of solid blue so it doesn't outshine the hero CTA. */
+.btn-upgrade-top {
+  background: rgba(57, 28, 87, 0.08);
+  color: var(--mou-accent);
+  border: 1px solid rgba(57, 28, 87, 0.18);
+  padding: 7px 14px;
+  border-radius: var(--radius-micro);
+  font-size: var(--fs-nav);
+  font-weight: var(--fw-semibold);
+  transition: background 120ms;
+}
+.btn-upgrade-top:hover { background: rgba(57, 28, 87, 0.14); }
+.btn-upgrade-top:active { transform: scale(0.96); }
+
 .btn-ghost {
   padding: 7px 12px;
   border-radius: var(--radius-micro);
@@ -1297,6 +1312,7 @@ input, textarea {
   .lr-prompt, .lr-date { display: none; }
   /* 44px touch targets on mobile (WCAG / Apple HIG minimum) */
   .topright .btn-primary,
+  .topright .btn-upgrade-top,
   .topright .btn-ghost,
   .topright .credit-pill,
   .topright .user-chip,

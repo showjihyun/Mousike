@@ -66,7 +66,7 @@ export function Topbar({ page, onPage, usage, onHome, user, onLogin, onLogout, o
         ) : (
           <button className="btn-ghost" onClick={onLogin}>로그인</button>
         )}
-        <button className="btn-primary" onClick={onUpgrade}>업그레이드</button>
+        <button className="btn-upgrade-top" onClick={onUpgrade}>업그레이드</button>
       </div>
     </div>
   );
