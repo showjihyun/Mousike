@@ -1258,7 +1258,7 @@ input, textarea {
 
 .toast {
   position: fixed;
-  top: 80px;
+  bottom: 32px;
   left: 50%;
   transform: translateX(-50%);
   background: var(--mou-ink);
@@ -1272,7 +1272,7 @@ input, textarea {
   box-shadow: var(--shadow-deep);
 }
 @keyframes toastIn {
-  from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+  from { opacity: 0; transform: translateX(-50%) translateY(10px); }
   to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
