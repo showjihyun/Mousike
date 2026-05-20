@@ -3,6 +3,14 @@ import type { Generation } from "./types";
 const BACKEND_URL = "http://localhost:8787";
 const POLL_INTERVAL_MS = 2_000;
 
+// Browsers throw `TypeError: Failed to fetch` for CORS / network / refused
+// connection. Surface a Korean message users can act on instead of leaking the
+// raw English string into the toast.
+function isNetworkError(e: unknown): boolean {
+  return e instanceof TypeError && /failed to fetch|networkerror|network error/i.test(e.message);
+}
+const NETWORK_ERR_KO = "백엔드에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.";
+
 export interface BackendSong {
   id: string;
   audioUrl: string;
@@ -39,12 +47,18 @@ async function enqueueJob(
   endpoint: "generate" | "repaint" | "lego",
   body: unknown,
 ): Promise<string> {
-  const res = await fetch(`${BACKEND_URL}/api/${endpoint}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BACKEND_URL}/api/${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    if (isNetworkError(e)) throw new Error(NETWORK_ERR_KO);
+    throw e;
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error ?? `Backend error ${res.status}`);
@@ -54,7 +68,13 @@ async function enqueueJob(
 }
 
 async function fetchJob(jobId: string): Promise<JobView> {
-  const res = await fetch(`${BACKEND_URL}/api/jobs/${jobId}`, { credentials: "include" });
+  let res: Response;
+  try {
+    res = await fetch(`${BACKEND_URL}/api/jobs/${jobId}`, { credentials: "include" });
+  } catch (e) {
+    if (isNetworkError(e)) throw new Error(NETWORK_ERR_KO);
+    throw e;
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error ?? `Backend error ${res.status}`);
