@@ -1155,6 +1155,53 @@ input, textarea {
 }
 .library-tab:hover { color: var(--fg); }
 
+.library-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  align-items: center;
+}
+.library-search {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-standard);
+  background: white;
+  color: var(--fg-secondary);
+}
+.library-search:focus-within { border-color: var(--mou-ink); }
+.library-search input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 14px;
+  color: var(--fg);
+}
+.library-search-clear {
+  border: none;
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 0 2px;
+}
+.library-search-clear:hover { color: var(--fg); }
+.library-sort {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-standard);
+  background: white;
+  font-size: 14px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.library-sort:focus { outline: none; border-color: var(--mou-ink); }
+
 .library-grid {
   display: grid;
   grid-template-columns: 1fr;
