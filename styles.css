@@ -1295,6 +1295,14 @@ input, textarea {
     grid-template-columns: 28px 1fr 60px 28px;
   }
   .lr-prompt, .lr-date { display: none; }
+  /* 44px touch targets on mobile (WCAG / Apple HIG minimum) */
+  .topright .btn-primary,
+  .topright .btn-ghost,
+  .topright .credit-pill,
+  .topright .user-chip,
+  .lang-toggle {
+    min-height: 44px;
+  }
 }
 
 /* ============================================================
