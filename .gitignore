@@ -26,3 +26,4 @@ gate*.png
 
 # Claude Code per-user state (permissions, env). Skills are still tracked.
 .claude/settings.local.json
+.gstack/
