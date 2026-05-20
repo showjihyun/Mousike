@@ -192,10 +192,7 @@ input, textarea {
   margin: 0 0 14px;
 }
 .hero-title .accent {
-  background: linear-gradient(135deg, var(--mou-accent) 0%, var(--accent-pink) 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: var(--mou-accent);
 }
 .hero-sub {
   font-size: var(--fs-body-lg);
