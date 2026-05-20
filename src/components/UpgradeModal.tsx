@@ -105,7 +105,7 @@ export function UpgradeModal({ currentTier, loggedIn, onClose, onRequireLogin, o
     <div className="modal-overlay" onClick={() => !busyTier && onClose()}>
       <div className="modal-card upgrade-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <span className="modal-title">✨ 플랜 비교</span>
+          <span className="modal-title">플랜 비교</span>
           <span className="modal-sub">30일 단건 결제. 자동 결제(정기결제)는 곧 추가됩니다.</span>
         </div>
         <div className="modal-body">
