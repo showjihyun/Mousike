@@ -43,7 +43,7 @@ function buildPayload(req: AceStepRequest): unknown[] {
     "",                     // 4  Time Signature
     "unknown",              // 5  Vocal Language
     50,                     // 6  DiT Inference Steps
-    7.0,                    // 7  DiT Guidance Scale
+    1.5,                    // 7  DiT Guidance Scale
     true,                   // 8  Random Seed
     "-1",                   // 9  Seed
     null,                   // 10 Reference Audio
