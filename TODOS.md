@@ -29,36 +29,34 @@ where to start.
 
 Full report: `~/.gstack/projects/showjihyun-Mousike/designs/design-audit-20260521/design-audit-localhost.md`
 
-### F1 (HIGH) — Mobile primary CTA "곡 만들기" is invisible
+### ~~F1 (HIGH) — Mobile primary CTA "곡 만들기" is invisible~~
 
-The submit button lives inside the prompt input on desktop and collapses out
-of frame at 375px. Mobile users can type a prompt but have no visible way to
-submit it. Either move the button below the input on mobile, or render it
-as a sticky bottom bar. Touch: `src/pages/HomePage.tsx`, `styles.css`
-(`.generate-btn` + the prompt-input layout).
+**Fixed by /design-review on main, 2026-05-21 (commit `a8649b5`).** The
+composer-box now stacks vertically at ≤760px so KO + 곡 만들기 share a
+bottom row, with the CTA flex-growing.
 
-### F2 (HIGH) — Mobile top-nav text wraps mid-character
+### ~~F2 (HIGH) — Mobile top-nav text wraps mid-character~~
 
-"로그인" stacks as 로/그/인, "업그레이드" wraps as 업그레/이드, "오늘 3/3"
-stacks 오/늘. F15 fixed the touch target heights but not the wrapping.
-Either add `white-space: nowrap` + horizontal scroll, or restructure into
-icon-only buttons on mobile. Touch: `styles.css` `.topright .btn-primary`,
-`.btn-ghost`, `.credit-pill`, `.lang-toggle`.
+**Fixed by /design-review on main, 2026-05-21 (commit `66410cd`).** Added
+`white-space: nowrap` to all top-bar interactive elements at ≤760px, plus
+tightened gap and padding so 4 chips fit at 375px.
 
 ### F3 (HIGH) — Mobile primary nav vanishes with no hamburger
 
 `.topnav { display: none; }` in the ≤760px media query hides 탐험 / 내
-라이브러리 / 도움말 with no alternative surface. Add a hamburger that
-opens a drawer, OR a bottom-nav bar with the primary actions. Touch:
-`src/components/Topbar.tsx` (or wherever topnav lives), `styles.css`
-media query.
+라이브러리 with no alternative surface (도움말 is now removed entirely per
+F7). Add a hamburger that opens a drawer, OR a bottom-nav bar with the
+primary actions. Touch: `src/components/Topbar.tsx` (or new
+`MobileDrawer.tsx`), `styles.css` media query. Deferred from /design-review
+2026-05-21 round 2 — risk budget would have spilled mid-build.
 
-### F4 (HIGH) — Blue "업그레이드" outshines primary "곡 만들기" CTA
+### ~~F4 (HIGH) — Blue "업그레이드" outshines primary "곡 만들기" CTA~~
 
-Top-right blue solid pulls more attention than the actual hero CTA. Either
-demote 업그레이드 to ghost/outline, or promote 곡 만들기 to a brand-color
-fill that beats it. Touch: `styles.css` `.btn-primary` (specifically the
-top-bar instance) or apply a more restrained variant.
+**Fixed by /design-review on main, 2026-05-21 (commit `0bd4907`).**
+Top-bar 업그레이드 now uses a new `.btn-upgrade-top` class — brand-purple
+tinted background + thin border — instead of `.btn-primary` solid blue.
+Modal Pay button keeps `.btn-primary` since "결제하기" IS the primary
+action in that context.
 
 ### F6 (HIGH) — Quick-start grid is the AI-slop 3-column feature grid
 
@@ -67,12 +65,13 @@ subtitle. Replace with a single-row chip strip ("차분한 카페 · 집중 공�
 영상 BGM · 잠들기 · 드라이브 · 운동"), or merge with the prompt
 placeholder rotation. Touch: `src/pages/HomePage.tsx` `.preset-grid`.
 
-### F7 (HIGH) — Help button "도움말" is a dead-end toast
+### ~~F7 (HIGH) — Help button "도움말" is a dead-end toast~~
 
-Fires "도움말은 아직 준비 중이에요!". A primary nav item that promises
-content and delivers "soon" drains goodwill. Either hide until ready,
-swap for a single FAQ modal, or replace with an onboarding tour.
-Touch: `src/components/Topbar.tsx` + decide on real help surface.
+**Fixed by /design-review on main, 2026-05-21 (commit `b13b705`).** Removed
+the 도움말 button from the topnav entirely, dropped `onHelp` from
+`TopbarProps`, and removed the placeholder handler from `App.tsx`. When
+real help content lands (FAQ modal, onboarding tour, docs page), add the
+button back wired to a real surface.
 
 ### F9 (MEDIUM) — "로그인" instant-redirects to Google OAuth
 
