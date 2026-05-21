@@ -12,6 +12,7 @@ interface TopbarProps {
   onLogin: () => void;
   onLogout: () => void;
   onUpgrade: () => void;
+  onAdvanced: () => void;
 }
 
 function UsageChip({ usage }: { usage: Usage }) {
@@ -34,7 +35,7 @@ function UsageChip({ usage }: { usage: Usage }) {
   );
 }
 
-export function Topbar({ page, onPage, usage, onHome, user, onLogin, onLogout, onUpgrade }: TopbarProps) {
+export function Topbar({ page, onPage, usage, onHome, user, onLogin, onLogout, onUpgrade, onAdvanced }: TopbarProps) {
   return (
     <div className="topbar">
       <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
@@ -64,6 +65,7 @@ export function Topbar({ page, onPage, usage, onHome, user, onLogin, onLogout, o
         ) : (
           <button className="btn-ghost" onClick={onLogin}>로그인</button>
         )}
+        <button className="btn-advanced-top" onClick={onAdvanced} title="고급 설정">고급</button>
         <button className="btn-upgrade-top" onClick={onUpgrade}>업그레이드</button>
       </div>
     </div>

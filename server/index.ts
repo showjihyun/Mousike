@@ -21,6 +21,7 @@ import {
   type LegoPayload,
 } from "./jobs.js";
 import { AUDIO_CACHE_DIR } from "./audio.js";
+import { ALL_GENRE_CATEGORIES, type GenreCategory } from "./genre.js";
 
 const PORT = 8787;
 const FREE_DURATION_SEC = 30;
@@ -163,11 +164,64 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+// 24 musical keys ACE-Step's KeyScale slot accepts. Mirrors src/types.ts MUSICAL_KEYS.
+const VALID_KEYS = new Set<string>([
+  "C Major","C Minor","C# Major","C# Minor","D Major","D Minor","D# Major","D# Minor",
+  "E Major","E Minor","F Major","F Minor","F# Major","F# Minor","G Major","G Minor",
+  "G# Major","G# Minor","A Major","A Minor","A# Major","A# Minor","B Major","B Minor",
+]);
+
+interface NormalizedAdvanced {
+  genre: GenreCategory | "auto";
+  bpm: number | "auto";
+  key: string | "auto";
+  durationSec: number | "auto";
+}
+
+// Validates the advanced settings blob from the FE. Returns an error string
+// on first invalid field; returns the normalized settings otherwise. Missing
+// blob → all-auto defaults so old FE clients still work.
+function normalizeAdvanced(raw: unknown): NormalizedAdvanced | { error: string } {
+  if (raw == null) return { genre: "auto", bpm: "auto", key: "auto", durationSec: "auto" };
+  if (typeof raw !== "object") return { error: "advanced must be an object" };
+  const r = raw as Record<string, unknown>;
+
+  const genre = r.genre;
+  if (genre !== undefined && genre !== "auto" && !ALL_GENRE_CATEGORIES.includes(genre as GenreCategory)) {
+    return { error: `advanced.genre invalid` };
+  }
+  const bpm = r.bpm;
+  if (bpm !== undefined && bpm !== "auto") {
+    if (typeof bpm !== "number" || !Number.isFinite(bpm) || bpm < 60 || bpm > 180) {
+      return { error: "advanced.bpm must be 60-180 or 'auto'" };
+    }
+  }
+  const key = r.key;
+  if (key !== undefined && key !== "auto") {
+    if (typeof key !== "string" || !VALID_KEYS.has(key)) {
+      return { error: "advanced.key invalid" };
+    }
+  }
+  const durationSec = r.durationSec;
+  if (durationSec !== undefined && durationSec !== "auto") {
+    if (typeof durationSec !== "number" || !Number.isFinite(durationSec) || durationSec < 15 || durationSec > 180) {
+      return { error: "advanced.durationSec must be 15-180 or 'auto'" };
+    }
+  }
+  return {
+    genre: (genre as GenreCategory | "auto" | undefined) ?? "auto",
+    bpm: (bpm as number | "auto" | undefined) ?? "auto",
+    key: (key as string | "auto" | undefined) ?? "auto",
+    durationSec: (durationSec as number | "auto" | undefined) ?? "auto",
+  };
+}
+
 app.post("/api/generate", generateLimiter, async (req, res) => {
-  const { prompt, lang, vocalLanguage } = req.body as {
+  const { prompt, lang, vocalLanguage, advanced } = req.body as {
     prompt?: unknown;
     lang?: unknown;
     vocalLanguage?: unknown;
+    advanced?: unknown;
   };
 
   if (typeof prompt !== "string" || prompt.trim() === "") {
@@ -188,14 +242,27 @@ app.post("/api/generate", generateLimiter, async (req, res) => {
     res.status(400).json({ error: "vocalLanguage must be auto, KO, or EN" });
     return;
   }
+  const adv = normalizeAdvanced(advanced);
+  if ("error" in adv) {
+    res.status(400).json({ error: adv.error });
+    return;
+  }
   if (!(await admitJob(req, res))) return;
+
+  // User-requested duration is capped at the tier's maximum so a free user
+  // can't bypass the limit by sending durationSec=180 in the advanced blob.
+  const tierMax = durationForUser(req.user);
+  const resolvedDuration = adv.durationSec === "auto" ? tierMax : Math.min(adv.durationSec, tierMax);
 
   try {
     const payload: GeneratePayload = {
       prompt: prompt.trim(),
       lang,
       vocalLanguage: vl,
-      durationSec: durationForUser(req.user),
+      durationSec: resolvedDuration,
+      advancedGenre: adv.genre,
+      advancedBpm: adv.bpm,
+      advancedKey: adv.key,
     };
     const jobId = await enqueue(req.user?.id ?? null, "generate", payload);
     res.status(202).json({ jobId });

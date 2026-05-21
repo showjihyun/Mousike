@@ -104,6 +104,18 @@ export function detectGenre(prompt: string): GenreMatch | null {
   return null;
 }
 
+// User-chosen override from the 고급 menu. Returns the canonical GenreMatch for
+// the category, bypassing keyword detection. Unknown category → null (the
+// caller treats this as "no genre" rather than erroring, matching detectGenre).
+export function genreByCategory(category: GenreCategory): GenreMatch | null {
+  const rule = RULES.find((r) => r.category === category);
+  if (!rule) return null;
+  const { category: c, label, tag } = rule;
+  return { category: c, label, tag };
+}
+
+export const ALL_GENRE_CATEGORIES: ReadonlyArray<GenreCategory> = RULES.map((r) => r.category);
+
 // detectGenre + adjust the BPM token if the user prompt hints at tempo.
 // Explicit "120 BPM" wins; otherwise 느린/slow scales the default BPM by 0.85,
 // 빠른/fast by 1.2. Genres without a "N BPM" token are unchanged.

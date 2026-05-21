@@ -18,6 +18,7 @@ import {
   type VocalLanguageChoice,
 } from "./api";
 import { type AuthUser, fetchCurrentUser, goToLogin, logout as apiLogout } from "./auth";
+import { AdvancedModal } from "./components/AdvancedModal";
 import { LegoModal } from "./components/LegoModal";
 import { LoginModal } from "./components/LoginModal";
 import { UpgradeModal } from "./components/UpgradeModal";
@@ -29,15 +30,17 @@ import { Topbar } from "./components/Topbar";
 import { SEED_GENERATIONS, makeGeneration } from "./data";
 import { HomePage } from "./pages/HomePage";
 import { LibraryPage } from "./pages/LibraryPage";
-import { loadCredits, loadGenerations, saveCredits, saveGenerations } from "./storage";
-import type {
-  Generation,
-  Page,
-  Preset,
-  Song,
-  Stage,
-  VariationOptions,
-  VariationType,
+import { loadAdvanced, loadCredits, loadGenerations, saveAdvanced, saveCredits, saveGenerations } from "./storage";
+import {
+  DEFAULT_ADVANCED,
+  type AdvancedSettings,
+  type Generation,
+  type Page,
+  type Preset,
+  type Song,
+  type Stage,
+  type VariationOptions,
+  type VariationType,
 } from "./types";
 
 // Three tries with 500ms / 1000ms backoff. Returns true if any attempt
@@ -74,6 +77,8 @@ export function App() {
   const [prompt, setPrompt] = useState("");
   const [lang, setLang] = useState("KO");
   const [vocalLanguage, setVocalLanguage] = useState<VocalLanguageChoice>("auto");
+  const [advanced, setAdvanced] = useState<AdvancedSettings>(() => loadAdvanced() ?? DEFAULT_ADVANCED);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   // Generation state — list of all generations (with parent links).
   // Lazy initializer so localStorage is read once, not on every render.
@@ -313,7 +318,7 @@ export function App() {
     }, LOADING_MSG_INTERVAL_MS);
 
     try {
-      const backendSongs = await apiGenerate(promptText, lang as Lang, vocalLanguage, (p) => {
+      const backendSongs = await apiGenerate(promptText, lang as Lang, vocalLanguage, advanced, (p) => {
         // First real status from the server wins over the canned rotation —
         // a queue position is more informative than "분위기를 잡는 중…".
         if (p.status === "queued") {
@@ -644,6 +649,7 @@ export function App() {
           }
         }}
         onUpgrade={() => setUpgradeOpen(true)}
+        onAdvanced={() => setAdvancedOpen(true)}
       />
 
       <div className="main">
@@ -735,6 +741,19 @@ export function App() {
         <LoginModal
           reason={loginPromptReason}
           onClose={() => setLoginPromptReason(null)}
+        />
+      )}
+
+      {advancedOpen && (
+        <AdvancedModal
+          initial={advanced}
+          maxDurationSec={songLengthSec}
+          onClose={() => setAdvancedOpen(false)}
+          onSubmit={(s) => {
+            setAdvanced(s);
+            saveAdvanced(s);
+            setAdvancedOpen(false);
+          }}
         />
       )}
 

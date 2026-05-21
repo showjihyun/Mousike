@@ -35,6 +35,44 @@ export interface StyleDef {
 // legacy songs (predating this field) — the chip is hidden for those.
 export type VocalLanguage = "KO" | "EN" | "unknown";
 
+// Mirror of server/genre.ts GenreCategory. Kept in sync manually; the validator
+// in server/index.ts is the source of truth.
+export type GenreCategory =
+  | "anime" | "pop" | "hiphop" | "rock" | "rnb"
+  | "kpop" | "ballad" | "trot" | "electronic";
+
+export const ALL_GENRES: ReadonlyArray<{ value: GenreCategory; label: string }> = [
+  { value: "kpop", label: "K-Pop" },
+  { value: "pop", label: "Pop" },
+  { value: "ballad", label: "발라드" },
+  { value: "rnb", label: "R&B" },
+  { value: "hiphop", label: "Hip-hop" },
+  { value: "rock", label: "Rock" },
+  { value: "electronic", label: "Electronic" },
+  { value: "trot", label: "트로트" },
+  { value: "anime", label: "Anime/J-Pop" },
+];
+
+// Optional power-user overrides surfaced via the 고급 menu. Any field set to
+// "auto" defers to the existing default behavior (keyword genre detection,
+// auto BPM/key, tier-default duration).
+export interface AdvancedSettings {
+  genre: GenreCategory | "auto";
+  bpm: number | "auto";       // 60-180 inclusive when set
+  key: string | "auto";       // e.g. "C Major"; one of MUSICAL_KEYS when set
+  durationSec: number | "auto"; // capped by tier on submit
+}
+
+export const DEFAULT_ADVANCED: AdvancedSettings = {
+  genre: "auto",
+  bpm: "auto",
+  key: "auto",
+  durationSec: "auto",
+};
+
+const KEY_ROOTS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"] as const;
+export const MUSICAL_KEYS: readonly string[] = KEY_ROOTS.flatMap((r) => [`${r} Major`, `${r} Minor`]);
+
 export interface Song {
   id: string;
   genId: string;

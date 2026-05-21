@@ -1,4 +1,4 @@
-import type { Generation } from "./types";
+import type { AdvancedSettings, Generation } from "./types";
 
 const BACKEND_URL = "http://localhost:8787";
 const POLL_INTERVAL_MS = 2_000;
@@ -108,9 +108,10 @@ export async function generate(
   prompt: string,
   lang: Lang,
   vocalLanguage: VocalLanguageChoice,
+  advanced: AdvancedSettings,
   onProgress?: ProgressCallback,
 ): Promise<BackendSong[]> {
-  const jobId = await enqueueJob("generate", { prompt, lang, vocalLanguage });
+  const jobId = await enqueueJob("generate", { prompt, lang, vocalLanguage, advanced });
   return pollJob(jobId, onProgress);
 }
 

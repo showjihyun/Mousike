@@ -77,6 +77,14 @@ _Avoid_: variant (overloaded — used informally in UI copy as "비슷한 분위
 A directed edge on the Master canvas, parent Song → derived Song, labeled with the derivation kind and its salient parameters (e.g. "repaint 0:45–1:15", "lego +bass").
 _Avoid_: link, connection
 
+**Advanced settings**:
+The four optional power-user overrides surfaced via the 고급 button in the topbar (genre, BPM, key, duration). Each defaults to `"auto"`, meaning the BE keeps its existing behavior (keyword-detected genre, ACE-Step-picked BPM/key, tier-default duration). Persisted to localStorage so power users don't re-enter them per generation. Sent on `POST /api/generate` only — `repaint` and `lego` don't accept them (they inherit the parent Song's character).
+_Avoid_: pro mode, expert mode, custom mode
+
+**Genre override**:
+A user-chosen `GenreCategory` (one of the 9 categories in `server/genre.ts`) from the 고급 menu that bypasses keyword-based detection in `resolveGenre`. Maps directly to the canonical `GenreMatch` for that category. When `"auto"`, keyword detection runs as before.
+_Avoid_: forced genre, manual genre
+
 ## Example dialogue
 
 > **Dev:** A user typed their prompt in Korean and set vocalLanguage to EN. What does ACE-Step see?

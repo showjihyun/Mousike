@@ -140,6 +140,21 @@ input, textarea {
 .btn-upgrade-top:hover { background: rgba(57, 28, 87, 0.14); }
 .btn-upgrade-top:active { transform: scale(0.96); }
 
+/* Neutral counterpart to btn-upgrade-top — same shape, no brand tint, since
+   고급 is a tool not a paid action. */
+.btn-advanced-top {
+  background: var(--bg-alt);
+  color: var(--fg-secondary);
+  border: 1px solid var(--border);
+  padding: 7px 14px;
+  border-radius: var(--radius-micro);
+  font-size: var(--fs-nav);
+  font-weight: var(--fw-semibold);
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.btn-advanced-top:hover { border-color: var(--mou-ink); color: var(--fg); }
+.btn-advanced-top:active { transform: scale(0.96); }
+
 .btn-ghost {
   padding: 7px 12px;
   border-radius: var(--radius-micro);
@@ -1549,6 +1564,64 @@ input, textarea {
   background: var(--mou-ink);
   color: white;
 }
+
+/* Advanced modal — wider than other modals to host the genre chip row */
+.modal-card-wide { max-width: 560px; }
+.adv-section + .adv-section { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.adv-label {
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+  color: var(--fg-secondary);
+  margin-bottom: 8px;
+}
+.adv-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.adv-chip {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-standard);
+  font-size: 12px;
+  font-weight: var(--fw-medium);
+  color: var(--fg-secondary);
+  background: var(--bg-alt);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 120ms, background 120ms, color 120ms;
+}
+.adv-chip:hover { border-color: var(--mou-ink); color: var(--fg); }
+.adv-chip.selected {
+  border-color: var(--mou-ink);
+  background: var(--mou-ink);
+  color: white;
+}
+.adv-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.adv-number {
+  flex: 0 0 120px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-standard);
+  font-size: 13px;
+  background: white;
+  color: var(--fg);
+}
+.adv-number:focus-visible { outline: 2px solid var(--mou-accent); outline-offset: 1px; }
+.adv-select {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-standard);
+  font-size: 13px;
+  background: white;
+  color: var(--fg);
+}
+.adv-select:focus-visible { outline: 2px solid var(--mou-accent); outline-offset: 1px; }
 
 .upgrade-card { max-width: 720px; }
 .plan-grid {

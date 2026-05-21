@@ -21,7 +21,16 @@ const SSE_TIMEOUT_MS = 10 * 60_000;
 export type AceVocalLanguageCode = "ko" | "en" | "unknown";
 
 export type AceStepRequest =
-  | { task: "text2music"; caption: string; durationSec: number; vocalLanguageCode: AceVocalLanguageCode }
+  | {
+      task: "text2music";
+      caption: string;
+      durationSec: number;
+      vocalLanguageCode: AceVocalLanguageCode;
+      // Optional 고급-menu overrides. When omitted, defaults are slot 2 = 0
+      // (auto) and slot 3 = "" (auto); ACE-Step's LM picks values then.
+      bpm?: number;
+      key?: string;
+    }
   | {
       task: "repaint";
       caption: string;
@@ -40,12 +49,14 @@ function buildPayload(req: AceStepRequest): unknown[] {
   const source = req.task === "text2music" ? null : req.source;
   const repaintStart = req.task === "repaint" ? req.startSec : 0.0;
   const repaintEnd = req.task === "repaint" ? req.endSec : -1;
+  const bpm = req.task === "text2music" ? (req.bpm ?? 0) : 0;
+  const keyScale = req.task === "text2music" ? (req.key ?? "") : "";
 
   return [
     req.caption,            // 0  Music Caption
     "",                     // 1  Lyrics
-    0,                      // 2  BPM (0 = auto)
-    "",                     // 3  KeyScale
+    bpm,                    // 2  BPM (0 = auto, 고급 override otherwise)
+    keyScale,               // 3  KeyScale ("" = auto, 고급 override otherwise)
     "",                     // 4  Time Signature
     req.vocalLanguageCode,  // 5  Vocal Language (ISO 639-1: "ko" | "en" | "unknown")
     50,                     // 6  DiT Inference Steps

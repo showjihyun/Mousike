@@ -1,10 +1,11 @@
 // localStorage-backed persistence for library state.
 // Schema is versioned so future shape changes can invalidate stale data.
-import type { Generation } from "./types";
+import type { AdvancedSettings, Generation } from "./types";
 
 const SCHEMA_VERSION = 1;
 const KEY_GENERATIONS = `mousike:v${SCHEMA_VERSION}:generations`;
 const KEY_CREDITS = `mousike:v${SCHEMA_VERSION}:credits`;
+const KEY_ADVANCED = `mousike:v${SCHEMA_VERSION}:advanced`;
 
 // JSON.stringify turns Date into ISO strings; revive them back into Date on the
 // `createdAt` key only (scoping by key avoids accidentally parsing user prompts
@@ -50,6 +51,26 @@ export function loadCredits(): number | null {
 export function saveCredits(credits: number): void {
   try {
     localStorage.setItem(KEY_CREDITS, String(credits));
+  } catch {
+    // see saveGenerations
+  }
+}
+
+export function loadAdvanced(): AdvancedSettings | null {
+  try {
+    const raw = localStorage.getItem(KEY_ADVANCED);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<AdvancedSettings>;
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed as AdvancedSettings;
+  } catch {
+    return null;
+  }
+}
+
+export function saveAdvanced(s: AdvancedSettings): void {
+  try {
+    localStorage.setItem(KEY_ADVANCED, JSON.stringify(s));
   } catch {
     // see saveGenerations
   }

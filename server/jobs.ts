@@ -14,7 +14,7 @@ import { getSupabase } from "./db.js";
 import { translateKoreanToEnglish } from "./ollama.js";
 import { runAceStep } from "./acestep.js";
 import { prepareSourceForAceStep, processAudio } from "./audio.js";
-import { applyGenreTag, resolveGenre, withQualitySuffix } from "./genre.js";
+import { applyGenreTag, genreByCategory, resolveGenre, withQualitySuffix, type GenreCategory } from "./genre.js";
 import { logUsage } from "./quota.js";
 
 const PORT = 8787;
@@ -35,6 +35,12 @@ export interface GeneratePayload {
   lang: "KO" | "EN";
   vocalLanguage: VocalLanguageChoice;
   durationSec: number;
+  // Advanced overrides from the 고급 menu. Each defaults to "auto"; the BE
+  // resolves them in runJob. durationSec above is already tier-capped by the
+  // route handler, so it's not duplicated here.
+  advancedGenre?: GenreCategory | "auto";
+  advancedBpm?: number | "auto";
+  advancedKey?: string | "auto";
 }
 
 export interface RepaintPayload {
@@ -401,15 +407,22 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       translatedCaption = await translateKoreanToEnglish(caption);
       caption = translatedCaption;
     }
-    const genre = resolveGenre(p.prompt);
+    // Advanced override: explicit genre choice from the 고급 menu bypasses
+    // keyword detection. When unset (or "auto"), fall back to resolveGenre.
+    const genre = p.advancedGenre && p.advancedGenre !== "auto"
+      ? genreByCategory(p.advancedGenre)
+      : resolveGenre(p.prompt);
     caption = withQualitySuffix(applyGenreTag(caption, genre));
     const vocalLanguage: VocalLanguageResolved = resolveVocalLanguage(
       p.vocalLanguage,
       genre?.category ?? null,
       p.lang,
     );
+    const bpmOverride = typeof p.advancedBpm === "number" ? p.advancedBpm : undefined;
+    const keyOverride = typeof p.advancedKey === "string" && p.advancedKey !== "auto" ? p.advancedKey : undefined;
     console.log(
-      `[job ${job.id}] generate genre=${genre?.category ?? "none"} ` +
+      `[job ${job.id}] generate genre=${genre?.category ?? "none"}(${p.advancedGenre ?? "auto"}) ` +
+      `bpm=${bpmOverride ?? "auto"} key=${keyOverride ?? "auto"} ` +
       `vocal=${vocalLanguage}(${p.vocalLanguage}) caption="${caption}"`,
     );
     const paths = await runAceStep({
@@ -417,6 +430,8 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       caption,
       durationSec: p.durationSec,
       vocalLanguageCode: toAceCode(vocalLanguage),
+      ...(bpmOverride !== undefined && { bpm: bpmOverride }),
+      ...(keyOverride !== undefined && { key: keyOverride }),
     });
     const filenames = await processAudio(paths);
     const songs: JobSong[] = filenames.map((filename, i) => ({
