@@ -22,6 +22,7 @@ interface SongPayload {
   instruments: string[];
   palette: [string, string];
   audioUrl?: string;
+  vocalLanguage?: "KO" | "EN" | "unknown";
   createdAt?: string;
 }
 
@@ -101,7 +102,8 @@ function validateGeneration(p: unknown): p is GenerationPayload {
       Array.isArray(s.instruments) && s.instruments.length <= MAX_INSTRUMENTS
         && s.instruments.every(isShortString) &&
       isPalette(s.palette) &&
-      (s.audioUrl == null || (typeof s.audioUrl === "string" && AUDIO_URL_PATTERN.test(s.audioUrl))),
+      (s.audioUrl == null || (typeof s.audioUrl === "string" && AUDIO_URL_PATTERN.test(s.audioUrl))) &&
+      (s.vocalLanguage == null || s.vocalLanguage === "KO" || s.vocalLanguage === "EN" || s.vocalLanguage === "unknown"),
   );
 }
 
@@ -135,6 +137,8 @@ function toClientSong(row: Record<string, unknown>) {
     instruments: row.instruments,
     palette: row.palette,
     audioUrl: row.audio_url ?? undefined,
+    // NULL column → "unknown" (matches legacy-row contract from CONTEXT.md).
+    vocalLanguage: row.vocal_language ?? "unknown",
     createdAt: row.created_at,
   };
 }
@@ -152,7 +156,7 @@ export function mountApi(app: Express): void {
         .select(
           "id, prompt, parent_gen_id, parent_song_id, variation_type, palette, created_at, " +
             "songs ( id, gen_id, title, style, bpm, music_key, vibe, duration_sec, prompt, " +
-            "liked, waveform, instruments, palette, audio_url, created_at )",
+            "liked, waveform, instruments, palette, audio_url, vocal_language, created_at )",
         )
         .eq("user_id", userId(req))
         .order("created_at", { ascending: false });
@@ -202,6 +206,9 @@ export function mountApi(app: Express): void {
         instruments: s.instruments,
         palette: s.palette,
         audio_url: s.audioUrl ?? null,
+        // "unknown" is stored as NULL — keeps the column meaning honest
+        // ("we don't know") and matches read-side fallback in toClientSong.
+        vocal_language: s.vocalLanguage && s.vocalLanguage !== "unknown" ? s.vocalLanguage : null,
         ...(s.createdAt && { created_at: s.createdAt }),
       }));
       const { error: songErr } = await sb.from("songs").insert(songRows);

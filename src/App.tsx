@@ -15,6 +15,7 @@ import {
   postConfirm,
   type Lang,
   type Usage,
+  type VocalLanguageChoice,
 } from "./api";
 import { type AuthUser, fetchCurrentUser, goToLogin, logout as apiLogout } from "./auth";
 import { LegoModal } from "./components/LegoModal";
@@ -72,6 +73,7 @@ export function App() {
   // Composer
   const [prompt, setPrompt] = useState("");
   const [lang, setLang] = useState("KO");
+  const [vocalLanguage, setVocalLanguage] = useState<VocalLanguageChoice>("auto");
 
   // Generation state — list of all generations (with parent links).
   // Lazy initializer so localStorage is read once, not on every render.
@@ -311,7 +313,7 @@ export function App() {
     }, LOADING_MSG_INTERVAL_MS);
 
     try {
-      const backendSongs = await apiGenerate(promptText, lang as Lang, (p) => {
+      const backendSongs = await apiGenerate(promptText, lang as Lang, vocalLanguage, (p) => {
         // First real status from the server wins over the canned rotation —
         // a queue position is more informative than "분위기를 잡는 중…".
         if (p.status === "queued") {
@@ -332,6 +334,7 @@ export function App() {
       newGen.songs = newGen.songs.map((s, idx) => ({
         ...s,
         audioUrl: backendSongs[idx]?.audioUrl,
+        vocalLanguage: backendSongs[idx]?.vocalLanguage,
       }));
       newGen.daysAgo = 0;
       setGenerations((gs) => [newGen, ...gs]);
@@ -513,6 +516,7 @@ export function App() {
       newGen.songs = newGen.songs.map((s, idx) => ({
         ...s,
         audioUrl: backendSongs[idx]?.audioUrl,
+        vocalLanguage: backendSongs[idx]?.vocalLanguage,
       }));
       newGen.daysAgo = 0;
       setGenerations((gs) => [newGen, ...gs]);
@@ -559,6 +563,7 @@ export function App() {
       newGen.songs = newGen.songs.map((s, idx) => ({
         ...s,
         audioUrl: backendSongs[idx]?.audioUrl,
+        vocalLanguage: backendSongs[idx]?.vocalLanguage,
       }));
       newGen.daysAgo = 0;
       setGenerations((gs) => [newGen, ...gs]);
@@ -649,6 +654,8 @@ export function App() {
               setPrompt={setPrompt}
               lang={lang}
               setLang={setLang}
+              vocalLanguage={vocalLanguage}
+              setVocalLanguage={setVocalLanguage}
               onSubmit={handleSubmit}
               onPresetClick={handlePresetClick}
               onStartFresh={handleStartFresh}

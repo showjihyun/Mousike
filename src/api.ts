@@ -16,6 +16,7 @@ export interface BackendSong {
   audioUrl: string;
   prompt: string;
   translatedCaption?: string;
+  vocalLanguage?: "KO" | "EN" | "unknown";
 }
 
 export interface BackendResponse {
@@ -23,6 +24,10 @@ export interface BackendResponse {
 }
 
 export type Lang = "KO" | "EN";
+
+// What the FE sends on /api/generate. "auto" lets the BE pick via the
+// vocal-language auto rule (see CONTEXT.md).
+export type VocalLanguageChoice = "auto" | "KO" | "EN";
 
 export type JobStatus = "queued" | "running" | "done" | "failed";
 
@@ -102,9 +107,10 @@ async function pollJob(jobId: string, onProgress?: ProgressCallback): Promise<Ba
 export async function generate(
   prompt: string,
   lang: Lang,
+  vocalLanguage: VocalLanguageChoice,
   onProgress?: ProgressCallback,
 ): Promise<BackendSong[]> {
-  const jobId = await enqueueJob("generate", { prompt, lang });
+  const jobId = await enqueueJob("generate", { prompt, lang, vocalLanguage });
   return pollJob(jobId, onProgress);
 }
 

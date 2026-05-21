@@ -22,9 +22,18 @@ const PORT = 8787;
 export type JobKind = "generate" | "repaint" | "lego";
 export type JobStatus = "queued" | "running" | "done" | "failed";
 
+// User's literal choice on /api/generate. "auto" is resolved server-side via
+// the vocal-language auto rule. See CONTEXT.md "Vocal language".
+export type VocalLanguageChoice = "auto" | "KO" | "EN";
+// Concrete value persisted on songs.vocal_language and returned to the FE.
+// "unknown" covers legacy songs (NULL column) and repaint/lego whose parent
+// song predates this feature.
+export type VocalLanguageResolved = "KO" | "EN" | "unknown";
+
 export interface GeneratePayload {
   prompt: string;
   lang: "KO" | "EN";
+  vocalLanguage: VocalLanguageChoice;
   durationSec: number;
 }
 
@@ -53,6 +62,7 @@ export interface JobSong {
   prompt: string;
   translatedCaption?: string;
   parentSongId?: string;
+  vocalLanguage: VocalLanguageResolved;
 }
 
 export interface JobResult {
@@ -332,6 +342,51 @@ async function markFailed(jobId: string, message: string): Promise<void> {
   if (error) console.error("[jobs] markFailed:", error.message);
 }
 
+// Vocal-language auto rule (see CONTEXT.md). Pure: caller supplies the inputs.
+// Note: returns "KO"|"EN" only — never "unknown". Use "unknown" only when
+// inheriting from a legacy parent song that predates this feature.
+function resolveVocalLanguage(
+  choice: VocalLanguageChoice,
+  genreCategory: string | null,
+  promptLang: "KO" | "EN",
+): "KO" | "EN" {
+  if (choice !== "auto") return choice;
+  if (genreCategory === "kpop" || genreCategory === "trot") return "KO";
+  if (promptLang === "KO") return "KO";
+  return "EN";
+}
+
+function toAceCode(v: VocalLanguageResolved): "ko" | "en" | "unknown" {
+  return v === "KO" ? "ko" : v === "EN" ? "en" : "unknown";
+}
+
+// Repaint/lego inherit vocalLanguage from their parent song. NULL column
+// (legacy) and missing-parent both fall through to "unknown".
+async function lookupParentVocalLanguage(
+  parentSongId: string | undefined,
+): Promise<VocalLanguageResolved> {
+  if (!parentSongId) return "unknown";
+  try {
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from("songs")
+      .select("vocal_language")
+      .eq("id", parentSongId)
+      .maybeSingle();
+    if (error) {
+      console.error(`[jobs] lookupParentVocalLanguage(${parentSongId}):`, error.message);
+      return "unknown";
+    }
+    if (!data) return "unknown";
+    const v = (data as { vocal_language?: string | null }).vocal_language;
+    if (v === "KO" || v === "EN") return v;
+    return "unknown";
+  } catch (e) {
+    console.error(`[jobs] lookupParentVocalLanguage(${parentSongId}):`, e instanceof Error ? e.message : e);
+    return "unknown";
+  }
+}
+
 // Resolve translations / source uploads + call ACE-Step + watermark, returning
 // the same song shape the client used to get synchronously. Throws on any
 // step failure; caller (workerTick) marks the job failed. Genre detection
@@ -348,17 +403,27 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     }
     const genre = resolveGenre(p.prompt);
     caption = withQualitySuffix(applyGenreTag(caption, genre));
-    console.log(`[job ${job.id}] generate genre=${genre?.category ?? "none"} caption="${caption}"`);
+    const vocalLanguage: VocalLanguageResolved = resolveVocalLanguage(
+      p.vocalLanguage,
+      genre?.category ?? null,
+      p.lang,
+    );
+    console.log(
+      `[job ${job.id}] generate genre=${genre?.category ?? "none"} ` +
+      `vocal=${vocalLanguage}(${p.vocalLanguage}) caption="${caption}"`,
+    );
     const paths = await runAceStep({
       task: "text2music",
       caption,
       durationSec: p.durationSec,
+      vocalLanguageCode: toAceCode(vocalLanguage),
     });
     const filenames = await processAudio(paths);
     const songs: JobSong[] = filenames.map((filename, i) => ({
       id: `${Date.now()}-${i}`,
       audioUrl: audioUrl(filename),
       prompt: p.prompt,
+      vocalLanguage,
       ...(translatedCaption !== undefined && { translatedCaption }),
     }));
     return { songs };
@@ -369,7 +434,11 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     const source = await prepareSourceForAceStep(p.sourceAudioUrl);
     const genre = resolveGenre(p.caption);
     const aceCaption = withQualitySuffix(applyGenreTag(p.caption, genre));
-    console.log(`[job ${job.id}] repaint ${p.startSec}s–${p.endSec}s genre=${genre?.category ?? "none"} caption="${aceCaption}"`);
+    const vocalLanguage = await lookupParentVocalLanguage(p.parentSongId);
+    console.log(
+      `[job ${job.id}] repaint ${p.startSec}s–${p.endSec}s ` +
+      `genre=${genre?.category ?? "none"} vocal=${vocalLanguage} caption="${aceCaption}"`,
+    );
     const paths = await runAceStep({
       task: "repaint",
       caption: aceCaption,
@@ -377,12 +446,14 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       source,
       startSec: p.startSec,
       endSec: p.endSec,
+      vocalLanguageCode: toAceCode(vocalLanguage),
     });
     const filenames = await processAudio(paths);
     const songs: JobSong[] = filenames.map((filename, i) => ({
       id: `${Date.now()}-${i}`,
       audioUrl: audioUrl(filename),
       prompt: p.caption || "부분 수정",
+      vocalLanguage,
       ...(p.parentSongId && { parentSongId: p.parentSongId }),
     }));
     return { songs };
@@ -396,18 +467,24 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     : `add ${p.instruments.join(", ")}`;
   const genre = resolveGenre(p.caption);
   const fullCaption = withQualitySuffix(applyGenreTag(baseCaption, genre, p.instruments));
-  console.log(`[job ${job.id}] lego genre=${genre?.category ?? "none"} caption="${fullCaption}"`);
+  const vocalLanguage = await lookupParentVocalLanguage(p.parentSongId);
+  console.log(
+    `[job ${job.id}] lego genre=${genre?.category ?? "none"} ` +
+    `vocal=${vocalLanguage} caption="${fullCaption}"`,
+  );
   const paths = await runAceStep({
     task: "lego",
     caption: fullCaption,
     durationSec: p.durationSec,
     source,
+    vocalLanguageCode: toAceCode(vocalLanguage),
   });
   const filenames = await processAudio(paths);
   const songs: JobSong[] = filenames.map((filename, i) => ({
     id: `${Date.now()}-${i}`,
     audioUrl: audioUrl(filename),
     prompt: fullCaption,
+    vocalLanguage,
     ...(p.parentSongId && { parentSongId: p.parentSongId }),
   }));
   return { songs };

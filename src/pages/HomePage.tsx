@@ -1,5 +1,6 @@
 import { Fragment, type FormEvent } from "react";
 import { PRESETS, POPULAR } from "../data";
+import type { VocalLanguageChoice } from "../api";
 import type { Generation, Preset, Song, Stage, VariationOptions, VariationType } from "../types";
 import { Icon } from "../components/Icon";
 import { LineageStrip } from "../components/LineageStrip";
@@ -13,6 +14,8 @@ interface HomePageProps {
   setPrompt: (p: string) => void;
   lang: string;
   setLang: (l: string) => void;
+  vocalLanguage: VocalLanguageChoice;
+  setVocalLanguage: (v: VocalLanguageChoice) => void;
   onSubmit: (e: FormEvent<HTMLFormElement>) => void;
   onPresetClick: (p: Preset | { prompt: string }) => void;
   onStartFresh: () => void;
@@ -35,7 +38,8 @@ interface HomePageProps {
 
 export function HomePage(props: HomePageProps) {
   const {
-    prompt, setPrompt, lang, setLang, onSubmit, onPresetClick, onStartFresh,
+    prompt, setPrompt, lang, setLang, vocalLanguage, setVocalLanguage,
+    onSubmit, onPresetClick, onStartFresh,
     stage, loadingMsg, pendingParent, currentGen, lineageChain, onJumpGen,
     playingId, progress, onPlay, onPause, onLike, onAction, onVariation,
     songLengthLabel,
@@ -131,6 +135,20 @@ export function HomePage(props: HomePageProps) {
             <span><kbd>Enter</kbd> 생성</span>
             <span>{songLengthLabel} 1곡</span>
             <span>약 {songLengthLabel} 소요</span>
+            <label className="vocal-lang-control">
+              <Icon name="mic" size={11} />
+              <span>보컬</span>
+              <select
+                className="vocal-lang-select"
+                value={vocalLanguage}
+                onChange={(e) => setVocalLanguage(e.target.value as VocalLanguageChoice)}
+                aria-label="보컬 언어"
+              >
+                <option value="auto">자동</option>
+                <option value="KO">한국어 (베타)</option>
+                <option value="EN">영어</option>
+              </select>
+            </label>
           </div>
           <span>{prompt.length}/200</span>
         </div>

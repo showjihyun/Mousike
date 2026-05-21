@@ -15,8 +15,13 @@ const BATCH_SIZE = 1;
 const SUBMIT_TIMEOUT_MS = 30_000;
 const SSE_TIMEOUT_MS = 10 * 60_000;
 
+// Vocal-language hint passed to ACE-Step's slot 5 ("Vocal Language"). ISO 639-1
+// codes (verified via the upstream cli.py example: "Vocal language (e.g., 'en',
+// 'zh', 'unknown')"). "unknown" tells the model to infer / not bias.
+export type AceVocalLanguageCode = "ko" | "en" | "unknown";
+
 export type AceStepRequest =
-  | { task: "text2music"; caption: string; durationSec: number }
+  | { task: "text2music"; caption: string; durationSec: number; vocalLanguageCode: AceVocalLanguageCode }
   | {
       task: "repaint";
       caption: string;
@@ -24,8 +29,9 @@ export type AceStepRequest =
       source: GradioSource;
       startSec: number;
       endSec: number;
+      vocalLanguageCode: AceVocalLanguageCode;
     }
-  | { task: "lego"; caption: string; durationSec: number; source: GradioSource };
+  | { task: "lego"; caption: string; durationSec: number; source: GradioSource; vocalLanguageCode: AceVocalLanguageCode };
 
 // Empirically the handler needs 50 inputs, not the 45 the schema reports —
 // positions 36 and 46-49 are hidden gr.State components, position 43 is a
@@ -41,7 +47,7 @@ function buildPayload(req: AceStepRequest): unknown[] {
     0,                      // 2  BPM (0 = auto)
     "",                     // 3  KeyScale
     "",                     // 4  Time Signature
-    "unknown",              // 5  Vocal Language
+    req.vocalLanguageCode,  // 5  Vocal Language (ISO 639-1: "ko" | "en" | "unknown")
     50,                     // 6  DiT Inference Steps
     1.5,                    // 7  DiT Guidance Scale
     true,                   // 8  Random Seed

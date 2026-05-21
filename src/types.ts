@@ -31,6 +31,10 @@ export interface StyleDef {
   icons: string[];
 }
 
+// Resolved vocal language: what the song actually sang in. "unknown" covers
+// legacy songs (predating this field) — the chip is hidden for those.
+export type VocalLanguage = "KO" | "EN" | "unknown";
+
 export interface Song {
   id: string;
   genId: string;
@@ -47,6 +51,7 @@ export interface Song {
   palette: Palette;
   createdAt: Date;
   audioUrl?: string;
+  vocalLanguage?: VocalLanguage;
 }
 
 export interface Generation {

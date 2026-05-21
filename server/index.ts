@@ -164,7 +164,11 @@ app.get("/health", (_req, res) => {
 });
 
 app.post("/api/generate", generateLimiter, async (req, res) => {
-  const { prompt, lang } = req.body as { prompt?: unknown; lang?: unknown };
+  const { prompt, lang, vocalLanguage } = req.body as {
+    prompt?: unknown;
+    lang?: unknown;
+    vocalLanguage?: unknown;
+  };
 
   if (typeof prompt !== "string" || prompt.trim() === "") {
     res.status(400).json({ error: "prompt must be a non-empty string" });
@@ -178,12 +182,19 @@ app.post("/api/generate", generateLimiter, async (req, res) => {
     res.status(400).json({ error: "lang must be KO or EN" });
     return;
   }
+  // vocalLanguage is optional; default "auto" matches the FE control's default.
+  const vl = vocalLanguage ?? "auto";
+  if (vl !== "auto" && vl !== "KO" && vl !== "EN") {
+    res.status(400).json({ error: "vocalLanguage must be auto, KO, or EN" });
+    return;
+  }
   if (!(await admitJob(req, res))) return;
 
   try {
     const payload: GeneratePayload = {
       prompt: prompt.trim(),
       lang,
+      vocalLanguage: vl,
       durationSec: durationForUser(req.user),
     };
     const jobId = await enqueue(req.user?.id ?? null, "generate", payload);

@@ -74,6 +74,11 @@ export function SongCard({
         <span className="meta-chip"><Icon name="activity" size={11} /> {song.bpm} BPM</span>
         <span className="meta-chip">{song.key}</span>
         <span className="meta-chip">{song.vibe}</span>
+        {(song.vocalLanguage === "KO" || song.vocalLanguage === "EN") && (
+          <span className="meta-chip">
+            <Icon name="mic" size={11} /> {song.vocalLanguage === "KO" ? "한국어" : "영어"}
+          </span>
+        )}
         {song.instruments.map((it, i) => (
           <span key={i} className="meta-sep" style={{ color: "var(--fg-muted)" }}>
             · {it}

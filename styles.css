@@ -300,6 +300,29 @@ input, textarea {
   color: var(--fg-muted);
 }
 .composer-meta .left { display: flex; align-items: center; gap: 14px; }
+.vocal-lang-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--fg-muted);
+}
+.vocal-lang-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  margin: 0;
+  font: inherit;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+.vocal-lang-select:focus-visible {
+  outline: 1px solid var(--border);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
 .composer-meta kbd {
   display: inline-block;
   padding: 2px 6px;
