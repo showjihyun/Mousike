@@ -1669,12 +1669,16 @@ input, textarea {
 /* Body inherits dark from the shell, scoped via .sf-create-shell so the
    home/library pages are untouched. */
 .sf-create-shell {
+  /* Use dvh for mobile Safari address-bar correctness; vh fallback first. */
   min-height: 100vh;
+  min-height: 100dvh;
   width: 100%;
   background: var(--sf-bg-deep);
   color: var(--sf-fg);
   position: relative;
   overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Animated aurora — two slow-spinning radial-gradient blobs. Pure CSS, no
@@ -1712,13 +1716,18 @@ input, textarea {
 .sf-header {
   position: relative;
   z-index: 2;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 28px;
+  gap: 12px;
+  padding: clamp(10px, 1.4vw, 18px) clamp(14px, 2.2vw, 32px);
   border-bottom: 1px solid var(--sf-border);
   background: linear-gradient(180deg, rgba(10, 16, 32, 0.85), rgba(10, 16, 32, 0.5));
   backdrop-filter: blur(8px);
+}
+@media (max-width: 480px) {
+  .sf-header { flex-wrap: wrap; }
 }
 .sf-header-left {
   display: flex;
@@ -1786,36 +1795,51 @@ input, textarea {
 }
 .sf-usage b { color: var(--sf-cyan); font-weight: 700; }
 
-/* Main editor area: full viewport minus header. Centered max width for
-   readability on large monitors. */
+/* Main editor area: fluid padding, no hard width cap on big monitors
+   (capped at 1800px to keep line lengths readable on 4K). Naturally
+   flowing — no flex-fill — so the result panel sits cleanly below
+   the form when it appears, and short screens scroll the whole page. */
 .sf-main {
   position: relative;
   z-index: 1;
-  padding: 28px 28px 56px;
-  max-width: 1320px;
+  flex: 1 1 auto;
+  padding: clamp(16px, 2.2vw, 36px) clamp(14px, 2.4vw, 40px) clamp(28px, 4vw, 64px);
+  max-width: 1800px;
+  width: 100%;
   margin: 0 auto;
 }
 
 .sf-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
-  gap: 22px;
+  gap: clamp(14px, 1.6vw, 28px);
+  align-items: stretch; /* CSS-grid default — keeps panels equal height */
 }
-@media (max-width: 920px) {
+/* Narrow desktop / large tablet: ease the ratio. */
+@media (max-width: 1100px) {
+  .sf-grid { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
+}
+/* Tablet portrait + below: stack vertically. */
+@media (max-width: 820px) {
   .sf-grid { grid-template-columns: 1fr; }
 }
 
-/* Panel — glassmorphic surface, neon border, subtle outer glow */
+/* Panel — glassmorphic surface, neon border, subtle outer glow.
+   Flex column so lyrics textarea can flex-grow within the panel. CSS-grid
+   auto-stretches both panels to the same height, so the right (config)
+   panel will match the left (lyrics) panel's natural height. */
 .sf-panel {
   position: relative;
   background: var(--sf-surface);
   border: 1px solid var(--sf-border);
   border-radius: 6px;
-  padding: 20px 22px;
+  padding: clamp(14px, 1.4vw, 22px) clamp(16px, 1.6vw, 26px);
   backdrop-filter: blur(12px);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.03),
     0 1px 30px rgba(0, 240, 255, 0.05);
+  display: flex;
+  flex-direction: column;
 }
 /* Corner ticks — purely decorative SCI brackets at each corner. */
 .sf-panel::before,
@@ -1867,10 +1891,14 @@ input, textarea {
   text-transform: uppercase;
 }
 
-/* Lyrics textarea — feels like a terminal */
+/* Lyrics textarea — feels like a terminal. Grows to fill remaining panel
+   height so on tall screens you get a real songwriting canvas. */
 .sf-lyrics {
   width: 100%;
-  min-height: 380px;
+  flex: 1 1 auto;
+  /* vh-based floor so even on short panels the textarea has presence; the
+     flex-grow handles tall screens. */
+  min-height: clamp(220px, 38vh, 480px);
   padding: 14px 16px;
   background: rgba(5, 8, 17, 0.6);
   border: 1px solid var(--sf-border);
@@ -1967,16 +1995,19 @@ input, textarea {
 
 /* CTA — the GENERATE button, big and luminous */
 .sf-cta-row {
+  flex: 0 0 auto;
   display: flex;
   justify-content: center;
-  margin-top: 28px;
+  margin-top: clamp(18px, 2vw, 32px);
 }
 .sf-cta {
   position: relative;
   display: inline-flex;
   align-items: center;
   gap: 14px;
-  padding: 16px 56px;
+  padding: clamp(12px, 1.4vw, 18px) clamp(36px, 5vw, 72px);
+  width: min(100%, 420px);
+  justify-content: center;
   background: linear-gradient(135deg, rgba(0, 240, 255, 0.15), rgba(181, 55, 255, 0.15));
   border: 1px solid var(--sf-border-strong);
   border-radius: 4px;
@@ -2004,13 +2035,14 @@ input, textarea {
 
 /* Result panel — full-width below the editor, same dark idiom */
 .sf-result {
-  margin-top: 32px;
-  padding: 22px 24px;
+  margin-top: clamp(20px, 2.4vw, 36px);
+  padding: clamp(16px, 1.6vw, 26px) clamp(18px, 1.8vw, 30px);
   background: var(--sf-surface);
   border: 1px solid var(--sf-border);
   border-radius: 6px;
   backdrop-filter: blur(12px);
   position: relative;
+  flex: 0 0 auto;
 }
 .sf-result::before,
 .sf-result::after {
