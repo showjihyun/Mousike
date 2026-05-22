@@ -55,19 +55,24 @@ export const ALL_GENRES: ReadonlyArray<{ value: GenreCategory; label: string }> 
 
 // Optional power-user overrides surfaced via the 고급 menu. Any field set to
 // "auto" defers to the existing default behavior (keyword genre detection,
-// auto BPM/key, tier-default duration).
+// auto BPM/key, tier-default duration). `lyrics` is `""` by default (empty =
+// instrumental, today's behavior); non-empty populates ACE-Step slot 1.
 export interface AdvancedSettings {
   genre: GenreCategory | "auto";
   bpm: number | "auto";       // 60-180 inclusive when set
   key: string | "auto";       // e.g. "C Major"; one of MUSICAL_KEYS when set
   durationSec: number | "auto"; // capped by tier on submit
+  lyrics: string;             // empty = instrumental; supports [Verse]/[Chorus]/[Bridge] tags
 }
+
+export const LYRICS_MAX_LEN = 2000;
 
 export const DEFAULT_ADVANCED: AdvancedSettings = {
   genre: "auto",
   bpm: "auto",
   key: "auto",
   durationSec: "auto",
+  lyrics: "",
 };
 
 const KEY_ROOTS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"] as const;

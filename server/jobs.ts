@@ -41,6 +41,11 @@ export interface GeneratePayload {
   advancedGenre?: GenreCategory | "auto";
   advancedBpm?: number | "auto";
   advancedKey?: string | "auto";
+  // User-supplied lyrics. Empty string = today's instrumental behavior (ACE-Step
+  // slot 1 stays empty). Non-empty populates slot 1; the model then sings the
+  // provided words (regardless of slot 5 vocal-language hint, which becomes
+  // weaker once explicit lyrics are present).
+  advancedLyrics?: string;
 }
 
 export interface RepaintPayload {
@@ -420,9 +425,11 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     );
     const bpmOverride = typeof p.advancedBpm === "number" ? p.advancedBpm : undefined;
     const keyOverride = typeof p.advancedKey === "string" && p.advancedKey !== "auto" ? p.advancedKey : undefined;
+    const lyricsOverride = typeof p.advancedLyrics === "string" && p.advancedLyrics.trim() !== "" ? p.advancedLyrics : undefined;
     console.log(
       `[job ${job.id}] generate genre=${genre?.category ?? "none"}(${p.advancedGenre ?? "auto"}) ` +
       `bpm=${bpmOverride ?? "auto"} key=${keyOverride ?? "auto"} ` +
+      `lyrics=${lyricsOverride ? `${lyricsOverride.length}chars` : "none"} ` +
       `vocal=${vocalLanguage}(${p.vocalLanguage}) caption="${caption}"`,
     );
     const paths = await runAceStep({
@@ -432,6 +439,7 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       vocalLanguageCode: toAceCode(vocalLanguage),
       ...(bpmOverride !== undefined && { bpm: bpmOverride }),
       ...(keyOverride !== undefined && { key: keyOverride }),
+      ...(lyricsOverride !== undefined && { lyrics: lyricsOverride }),
     });
     const filenames = await processAudio(paths);
     const songs: JobSong[] = filenames.map((filename, i) => ({

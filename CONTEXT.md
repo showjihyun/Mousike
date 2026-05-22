@@ -85,6 +85,10 @@ _Avoid_: pro mode, expert mode, custom mode
 A user-chosen `GenreCategory` (one of the 9 categories in `server/genre.ts`) from the 고급 menu that bypasses keyword-based detection in `resolveGenre`. Maps directly to the canonical `GenreMatch` for that category. When `"auto"`, keyword detection runs as before.
 _Avoid_: forced genre, manual genre
 
+**Lyrics** (advanced-settings field, `lyrics: string`):
+Optional user-supplied words the model should sing. Populates ACE-Step slot 1 (Lyrics). Empty string keeps today's instrumental behavior. Supports structure tags `[Verse]`, `[Chorus]`, `[Bridge]`. Once non-empty, lyrics dominate the model's sung output — the `vocalLanguage`/slot 5 hint becomes weaker because the model has explicit text to phonemize. Capped at 2000 chars (`LYRICS_MAX_LEN`) to prevent abuse.
+_Avoid_: text, words, song text
+
 ## Example dialogue
 
 > **Dev:** A user typed their prompt in Korean and set vocalLanguage to EN. What does ACE-Step see?

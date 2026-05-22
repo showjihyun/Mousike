@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   ALL_GENRES,
   DEFAULT_ADVANCED,
+  LYRICS_MAX_LEN,
   MUSICAL_KEYS,
   type AdvancedSettings,
   type GenreCategory,
@@ -45,6 +46,10 @@ export function AdvancedModal({ initial, maxDurationSec, onClose, onSubmit }: Ad
 
   function setDuration(v: string) {
     setS((prev) => ({ ...prev, durationSec: v === "auto" ? "auto" : Number(v) }));
+  }
+
+  function setLyrics(v: string) {
+    setS((prev) => ({ ...prev, lyrics: v.slice(0, LYRICS_MAX_LEN) }));
   }
 
   function handleSubmit() { onSubmit(s); }
@@ -131,6 +136,20 @@ export function AdvancedModal({ initial, maxDurationSec, onClose, onSubmit }: Ad
                 <option key={d} value={d}>{d}초</option>
               ))}
             </select>
+          </section>
+
+          <section className="adv-section">
+            <div className="adv-label">가사 (선택)</div>
+            <textarea
+              className="adv-textarea"
+              value={s.lyrics}
+              onChange={(e) => setLyrics(e.target.value)}
+              placeholder={"비워두면 인스트루멘탈로 생성돼요.\n구조 태그 사용 가능: [Verse] [Chorus] [Bridge]"}
+              rows={6}
+              maxLength={LYRICS_MAX_LEN}
+              spellCheck={false}
+            />
+            <div className="adv-char-count">{s.lyrics.length}/{LYRICS_MAX_LEN}</div>
           </section>
         </div>
         <div className="modal-footer">

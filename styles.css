@@ -1622,6 +1622,26 @@ input, textarea {
   color: var(--fg);
 }
 .adv-select:focus-visible { outline: 2px solid var(--mou-accent); outline-offset: 1px; }
+.adv-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-standard);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.5;
+  background: white;
+  color: var(--fg);
+  resize: vertical;
+  min-height: 110px;
+}
+.adv-textarea:focus-visible { outline: 2px solid var(--mou-accent); outline-offset: 1px; }
+.adv-char-count {
+  text-align: right;
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-top: 4px;
+}
 
 .upgrade-card { max-width: 720px; }
 .plan-grid {

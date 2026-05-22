@@ -27,9 +27,11 @@ export type AceStepRequest =
       durationSec: number;
       vocalLanguageCode: AceVocalLanguageCode;
       // Optional 고급-menu overrides. When omitted, defaults are slot 2 = 0
-      // (auto) and slot 3 = "" (auto); ACE-Step's LM picks values then.
+      // (auto), slot 3 = "" (auto), slot 1 = "" (no lyrics → instrumental);
+      // ACE-Step's LM picks BPM/key then and sings improvised vowels.
       bpm?: number;
       key?: string;
+      lyrics?: string;
     }
   | {
       task: "repaint";
@@ -51,10 +53,11 @@ function buildPayload(req: AceStepRequest): unknown[] {
   const repaintEnd = req.task === "repaint" ? req.endSec : -1;
   const bpm = req.task === "text2music" ? (req.bpm ?? 0) : 0;
   const keyScale = req.task === "text2music" ? (req.key ?? "") : "";
+  const lyrics = req.task === "text2music" ? (req.lyrics ?? "") : "";
 
   return [
     req.caption,            // 0  Music Caption
-    "",                     // 1  Lyrics
+    lyrics,                 // 1  Lyrics ("" = instrumental, 고급 override otherwise)
     bpm,                    // 2  BPM (0 = auto, 고급 override otherwise)
     keyScale,               // 3  KeyScale ("" = auto, 고급 override otherwise)
     "",                     // 4  Time Signature

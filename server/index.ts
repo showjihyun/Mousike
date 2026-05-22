@@ -171,18 +171,21 @@ const VALID_KEYS = new Set<string>([
   "G# Major","G# Minor","A Major","A Minor","A# Major","A# Minor","B Major","B Minor",
 ]);
 
+const LYRICS_MAX_LEN = 2000;
+
 interface NormalizedAdvanced {
   genre: GenreCategory | "auto";
   bpm: number | "auto";
   key: string | "auto";
   durationSec: number | "auto";
+  lyrics: string;
 }
 
 // Validates the advanced settings blob from the FE. Returns an error string
 // on first invalid field; returns the normalized settings otherwise. Missing
 // blob → all-auto defaults so old FE clients still work.
 function normalizeAdvanced(raw: unknown): NormalizedAdvanced | { error: string } {
-  if (raw == null) return { genre: "auto", bpm: "auto", key: "auto", durationSec: "auto" };
+  if (raw == null) return { genre: "auto", bpm: "auto", key: "auto", durationSec: "auto", lyrics: "" };
   if (typeof raw !== "object") return { error: "advanced must be an object" };
   const r = raw as Record<string, unknown>;
 
@@ -208,11 +211,21 @@ function normalizeAdvanced(raw: unknown): NormalizedAdvanced | { error: string }
       return { error: "advanced.durationSec must be 15-180 or 'auto'" };
     }
   }
+  const lyrics = r.lyrics;
+  if (lyrics !== undefined && lyrics !== null) {
+    if (typeof lyrics !== "string") {
+      return { error: "advanced.lyrics must be a string" };
+    }
+    if (lyrics.length > LYRICS_MAX_LEN) {
+      return { error: `advanced.lyrics must be ${LYRICS_MAX_LEN} characters or fewer` };
+    }
+  }
   return {
     genre: (genre as GenreCategory | "auto" | undefined) ?? "auto",
     bpm: (bpm as number | "auto" | undefined) ?? "auto",
     key: (key as string | "auto" | undefined) ?? "auto",
     durationSec: (durationSec as number | "auto" | undefined) ?? "auto",
+    lyrics: typeof lyrics === "string" ? lyrics : "",
   };
 }
 
@@ -263,6 +276,7 @@ app.post("/api/generate", generateLimiter, async (req, res) => {
       advancedGenre: adv.genre,
       advancedBpm: adv.bpm,
       advancedKey: adv.key,
+      advancedLyrics: adv.lyrics,
     };
     const jobId = await enqueue(req.user?.id ?? null, "generate", payload);
     res.status(202).json({ jobId });
