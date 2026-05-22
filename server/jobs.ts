@@ -15,11 +15,11 @@ import { translateKoreanToEnglish } from "./ollama.js";
 import { runAceStep } from "./acestep.js";
 import { prepareSourceForAceStep, processAudio } from "./audio.js";
 import { applyGenreTag, genreByCategory, resolveGenre, withQualitySuffix, type GenreCategory } from "./genre.js";
-import { logUsage } from "./quota.js";
+import { logUsage, type UsageAction } from "./quota.js";
 
 const PORT = 8787;
 
-export type JobKind = "generate" | "repaint" | "lego";
+export type JobKind = "generate" | "repaint" | "lego" | "rvc_train" | "rvc_infer";
 export type JobStatus = "queued" | "running" | "done" | "failed";
 
 // User's literal choice on /api/generate. "auto" is resolved server-side via
@@ -65,7 +65,26 @@ export interface LegoPayload {
   durationSec: number;
 }
 
-export type JobPayload = GeneratePayload | RepaintPayload | LegoPayload;
+// RVC voice-clone job kinds. Both reference a user_voices row by id;
+// the worker reads sample paths / weight paths from that row rather than
+// embedding them in the payload, so a single training-completion
+// transaction (status → 'trained', weight_path set) atomically promotes
+// every queued infer to succeed.
+export interface RvcTrainPayload {
+  voiceId: string;
+  epochs: number;
+}
+
+export interface RvcInferPayload {
+  voiceId: string;
+}
+
+export type JobPayload =
+  | GeneratePayload
+  | RepaintPayload
+  | LegoPayload
+  | RvcTrainPayload
+  | RvcInferPayload;
 
 export interface JobSong {
   id: string;
@@ -116,12 +135,40 @@ function mintJobId(): string {
   return randomBytes(12).toString("hex");
 }
 
+// Tier → priority snapshot for the queue. See migration 009 header for why
+// this is a snapshot taken at enqueue time rather than re-read at claim.
+function tierToPriority(tier: string | null): number {
+  if (tier === "pro") return 3;
+  if (tier === "starter") return 2;
+  if (tier === "free") return 1;
+  return 0;
+}
+
+// Read the user's current tier. Returns null on any failure so we degrade
+// to priority 0 (back of queue) rather than 500ing on enqueue — a missing
+// tier read is recoverable; a refused enqueue is not.
+async function lookupUserTier(userId: string | null): Promise<string | null> {
+  if (userId === null) return null;
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from("users")
+    .select("tier")
+    .eq("id", userId)
+    .maybeSingle();
+  if (error) {
+    console.error(`[jobs] lookupUserTier(${userId}):`, error.message);
+    return null;
+  }
+  return (data as { tier?: string } | null)?.tier ?? null;
+}
+
 export async function enqueue(
   userId: string | null,
   kind: JobKind,
   payload: JobPayload,
 ): Promise<string> {
   const id = mintJobId();
+  const priority = tierToPriority(await lookupUserTier(userId));
   const sb = getSupabase();
   const { error } = await sb.from("jobs").insert({
     id,
@@ -129,6 +176,7 @@ export async function enqueue(
     kind,
     status: "queued",
     payload,
+    priority,
   });
   if (error) throw error;
   notifyWorker();
@@ -312,10 +360,14 @@ async function claimNextJob(): Promise<ClaimedJob | null> {
   // SELECT-then-UPDATE is race-free without explicit row locks. If we ever
   // run multiple workers, swap this for a `claim_next_job()` RPC that uses
   // `for update skip locked`.
+  // Order: priority DESC (Pro=3 → Starter=2 → Free=1 → anon=0), then
+  // created_at ASC for FIFO within a priority level. Backed by
+  // jobs_claim_idx (migration 009).
   const { data, error } = await sb
     .from("jobs")
     .select("id, user_id, kind, payload")
     .eq("status", "queued")
+    .order("priority", { ascending: false })
     .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle();
@@ -452,6 +504,17 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     return { songs };
   }
 
+  if (job.kind === "rvc_train") {
+    // Implementation lands in commit B (server/rvc.ts + server/voice-storage.ts).
+    // Stubbed here so the dispatch table is complete and the queue still
+    // accepts these kinds without crashing the worker.
+    throw new Error("rvc_train not yet implemented");
+  }
+
+  if (job.kind === "rvc_infer") {
+    throw new Error("rvc_infer not yet implemented");
+  }
+
   if (job.kind === "repaint") {
     const p = job.payload as RepaintPayload;
     const source = await prepareSourceForAceStep(p.sourceAudioUrl);
@@ -513,6 +576,10 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
   return { songs };
 }
 
+function isUsageActionKind(kind: JobKind): kind is UsageAction {
+  return kind === "generate" || kind === "repaint" || kind === "lego";
+}
+
 async function workerTick(): Promise<boolean> {
   let claimed: ClaimedJob | null;
   try {
@@ -525,7 +592,13 @@ async function workerTick(): Promise<boolean> {
   try {
     const result = await runJob(claimed);
     await markDone(claimed.id, result);
-    if (claimed.user_id) await logUsage(claimed.user_id, claimed.kind);
+    // RVC kinds (rvc_train / rvc_infer) are out of scope for usage_log in
+    // Phase 1's commit A — they'll get their own quota wiring with the
+    // API endpoints in commit B/C. ACE-Step kinds keep the existing
+    // per-tier rolling-window counter.
+    if (claimed.user_id && isUsageActionKind(claimed.kind)) {
+      await logUsage(claimed.user_id, claimed.kind);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[job ${claimed.id}] failed:`, message);
