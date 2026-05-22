@@ -260,3 +260,103 @@ export async function lego(args: {
   const jobId = await enqueueJob("lego", body);
   return pollJob(jobId, onProgress);
 }
+
+// --- Voice clone (Phase 1 of the musicai-stack pivot, ADR 0005) -------------
+
+export type VoiceStatus = "uploading" | "training" | "trained" | "failed";
+
+export interface UserVoice {
+  id: string;
+  displayName: string;
+  sampleSeconds: number | null;
+  epochs: number;
+  status: VoiceStatus;
+  error: string | null;
+  createdAt: string;
+  trainedAt: string | null;
+}
+
+// BE returns snake_case via the supabase-js client. Same revival pattern as
+// reviveGeneration but voices stay as ISO strings on the FE — there's no
+// Date math the UI does on them.
+interface RawUserVoice {
+  id: string;
+  display_name: string;
+  sample_seconds: number | null;
+  epochs: number;
+  status: VoiceStatus;
+  error: string | null;
+  created_at: string;
+  trained_at: string | null;
+}
+
+function toUserVoice(r: RawUserVoice): UserVoice {
+  return {
+    id: r.id,
+    displayName: r.display_name,
+    sampleSeconds: r.sample_seconds,
+    epochs: r.epochs,
+    status: r.status,
+    error: r.error,
+    createdAt: r.created_at,
+    trainedAt: r.trained_at,
+  };
+}
+
+export async function fetchVoices(): Promise<UserVoice[]> {
+  let res: Response;
+  try {
+    res = await fetch(`${BACKEND_URL}/api/voices`, { credentials: "include" });
+  } catch (e) {
+    if (isNetworkError(e)) throw new Error(NETWORK_ERR_KO);
+    throw e;
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? `Backend error ${res.status}`);
+  }
+  const data = (await res.json()) as { voices: RawUserVoice[] };
+  return data.voices.map(toUserVoice);
+}
+
+export async function uploadVoiceSamples(
+  displayName: string,
+  files: File[],
+): Promise<UserVoice> {
+  const form = new FormData();
+  form.append("displayName", displayName);
+  for (const f of files) form.append("files", f);
+  let res: Response;
+  try {
+    res = await fetch(`${BACKEND_URL}/api/voice-samples`, {
+      method: "POST",
+      credentials: "include",
+      body: form,
+    });
+  } catch (e) {
+    if (isNetworkError(e)) throw new Error(NETWORK_ERR_KO);
+    throw e;
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? `Backend error ${res.status}`);
+  }
+  const data = (await res.json()) as {
+    voiceId: string;
+    sampleSeconds: number;
+    epochs: number;
+    status: VoiceStatus;
+  };
+  // The BE responds with a subset of the row — synthesise the full UserVoice
+  // shape so the caller can prepend it to the list without a refetch race.
+  return {
+    id: data.voiceId,
+    displayName,
+    sampleSeconds: data.sampleSeconds,
+    epochs: data.epochs,
+    status: data.status,
+    error: null,
+    createdAt: new Date().toISOString(),
+    trainedAt: null,
+  };
+}

@@ -2,7 +2,7 @@ export type VariationType = "similar" | "restyle" | "repaint" | "lego";
 
 export type Stage = "idle" | "loading" | "results";
 
-export type Page = "home" | "library" | "create";
+export type Page = "home" | "library" | "create" | "voice";
 
 export type Palette = [string, string];
 

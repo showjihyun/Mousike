@@ -1,0 +1,276 @@
+// Voice-clone page — Phase 1 of the musicai-stack pivot (ADR 0005).
+// Upload 2-5 vocal samples → server trains an RVC model → the trained
+// voice can later be applied to a canned backing track via "들어보기"
+// (the demo button is rendered disabled until Commit C wires the
+// train/infer endpoints).
+import { useCallback, useEffect, useState } from "react";
+import { fetchVoices, uploadVoiceSamples, type UserVoice, type VoiceStatus } from "../api";
+import type { AuthUser, Tier } from "../auth";
+import { Icon } from "../components/Icon";
+
+interface VoicePageProps {
+  user: AuthUser | null;
+  onRequireLogin: () => void;
+  onShowToast: (msg: string) => void;
+}
+
+const STATUS_LABELS: Record<VoiceStatus, { label: string; cls: string }> = {
+  uploading: { label: "업로드 완료", cls: "voice-status-pending" },
+  training: { label: "학습 중", cls: "voice-status-training" },
+  trained: { label: "준비 완료", cls: "voice-status-trained" },
+  failed: { label: "실패", cls: "voice-status-failed" },
+};
+
+const TIER_CAP: Record<Tier, number> = { free: 1, starter: 1, pro: 3 };
+const TIER_EPOCHS: Record<Tier, number> = { free: 100, starter: 200, pro: 250 };
+
+const POLL_INTERVAL_MS = 5_000;
+
+export function VoicePage({ user, onRequireLogin, onShowToast }: VoicePageProps) {
+  const [voices, setVoices] = useState<UserVoice[]>([]);
+  const [initialLoading, setInitialLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) {
+      setVoices([]);
+      setInitialLoading(false);
+      return;
+    }
+    let cancelled = false;
+    async function refresh(initial: boolean) {
+      try {
+        const list = await fetchVoices();
+        if (!cancelled) setVoices(list);
+      } catch (e) {
+        // Surface only the first-load failure — polling failures stay
+        // silent so transient network blips don't spam the toast.
+        if (!cancelled && initial) {
+          onShowToast(`보이스 목록 로드 실패: ${e instanceof Error ? e.message : ""}`);
+        }
+      } finally {
+        if (!cancelled && initial) setInitialLoading(false);
+      }
+    }
+    refresh(true);
+    const interval = window.setInterval(() => refresh(false), POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [user, onShowToast]);
+
+  const handleUploadSuccess = useCallback(
+    (v: UserVoice) => {
+      setVoices((vs) => [v, ...vs]);
+      onShowToast(`"${v.displayName}" 업로드 완료. 학습 트리거는 곧 추가됩니다.`);
+    },
+    [onShowToast],
+  );
+
+  if (!user) {
+    return (
+      <div className="voice-gate">
+        <div className="voice-gate-emoji">🎤</div>
+        <h1>내 목소리로 노래</h1>
+        <p className="voice-gate-sub">
+          보컬 샘플 2-5개를 업로드하면 내 목소리로 부르는 곡을 만들 수 있어요.
+          시작하려면 로그인이 필요해요.
+        </p>
+        <button className="btn-primary" onClick={onRequireLogin}>
+          로그인하기
+        </button>
+      </div>
+    );
+  }
+
+  const cap = TIER_CAP[user.tier];
+  const epochsForTier = TIER_EPOCHS[user.tier];
+  const active = voices.filter((v) => v.status !== "failed").length;
+  const canCreate = active < cap;
+
+  return (
+    <>
+      <div className="voice-head">
+        <h1>🎤 내 보이스</h1>
+        <p className="voice-sub">
+          내 목소리를 학습시켜 곡에 입혀보세요. {tierLabel(user.tier)} {active}/{cap} 사용 ·
+          학습 {epochsForTier} epoch
+          {user.tier === "free" && (
+            <span className="voice-beta-label"> (베타 · 빠른 학습 / 낮은 품질)</span>
+          )}
+        </p>
+      </div>
+
+      {canCreate ? (
+        <UploadCard
+          tier={user.tier}
+          onSuccess={handleUploadSuccess}
+          onError={onShowToast}
+        />
+      ) : (
+        <div className="voice-cap-notice">
+          {tierLabel(user.tier)} 한도({cap}개)에 도달했어요.
+          {user.tier !== "pro" && " Pro로 업그레이드하면 3개까지 만들 수 있어요."}
+        </div>
+      )}
+
+      {initialLoading ? (
+        <div className="voice-empty">
+          <div>불러오는 중…</div>
+        </div>
+      ) : voices.length === 0 ? (
+        <div className="voice-empty">
+          <div className="emoji">🎤</div>
+          <div>아직 보이스가 없어요. 위에서 첫 보이스를 만들어보세요.</div>
+        </div>
+      ) : (
+        <div className="voice-list">
+          {voices.map((v) => (
+            <VoiceRow key={v.id} voice={v} />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function tierLabel(tier: Tier): string {
+  if (tier === "pro") return "Pro";
+  if (tier === "starter") return "Starter";
+  return "Free";
+}
+
+interface UploadCardProps {
+  tier: Tier;
+  onSuccess: (v: UserVoice) => void;
+  onError: (msg: string) => void;
+}
+
+function UploadCard({ tier, onSuccess, onError }: UploadCardProps) {
+  const [displayName, setDisplayName] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  const totalMb = files.reduce((s, f) => s + f.size, 0) / 1024 / 1024;
+
+  function pickFiles(fileList: FileList | null) {
+    if (!fileList) return;
+    // Filter to mp3/wav even if the OS picker let other types through (some
+    // platforms ignore the accept= hint). Trim to 5 — BE rejects more.
+    const list = Array.from(fileList)
+      .filter((f) => /\.(mp3|wav)$/i.test(f.name))
+      .slice(0, 5);
+    setFiles(list);
+  }
+
+  async function handleSubmit() {
+    if (submitting) return;
+    const name = displayName.trim();
+    if (!name) {
+      onError("보이스 이름을 입력해주세요.");
+      return;
+    }
+    if (files.length < 2) {
+      onError("샘플 파일 2-5개를 첨부해주세요.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const v = await uploadVoiceSamples(name, files);
+      setDisplayName("");
+      setFiles([]);
+      onSuccess(v);
+    } catch (e) {
+      onError(`업로드 실패: ${e instanceof Error ? e.message : ""}`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="voice-upload-card">
+      <div className="voice-upload-head">새 보이스 만들기</div>
+      <input
+        type="text"
+        value={displayName}
+        onChange={(e) => setDisplayName(e.target.value.slice(0, 64))}
+        placeholder="보이스 이름 (예: 내 목소리)"
+        className="voice-input"
+        disabled={submitting}
+        maxLength={64}
+      />
+      <label className="voice-dropzone">
+        <input
+          type="file"
+          accept=".mp3,.wav,audio/mpeg,audio/wav"
+          multiple
+          onChange={(e) => pickFiles(e.target.files)}
+          disabled={submitting}
+          style={{ display: "none" }}
+        />
+        <div className="voice-dropzone-inner">
+          {files.length === 0 ? (
+            <>
+              <div className="voice-dropzone-emoji">🎙️</div>
+              <div className="voice-dropzone-main">mp3 또는 wav 파일 2-5개 선택</div>
+              <div className="voice-dropzone-hint">
+                총 30-180초의 깨끗한 보컬 (반주·노이즈 없을수록 좋음)
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="voice-dropzone-emoji">✓</div>
+              <div className="voice-dropzone-main">
+                {files.length}개 파일 · {totalMb.toFixed(1)}MB
+              </div>
+              <ul className="voice-file-list">
+                {files.map((f, i) => (
+                  <li key={`${f.name}-${i}`}>{f.name}</li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      </label>
+      <div className="voice-upload-actions">
+        <button
+          className="btn-primary"
+          onClick={handleSubmit}
+          disabled={submitting || !displayName.trim() || files.length < 2}
+        >
+          {submitting ? "업로드 중…" : "업로드"}
+        </button>
+        <span className="voice-upload-note">
+          업로드 후 자동 학습 (~{tier === "pro" ? 25 : tier === "starter" ? 20 : 10}분, 곧 추가)
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function VoiceRow({ voice }: { voice: UserVoice }) {
+  const status = STATUS_LABELS[voice.status];
+  const created = new Date(voice.createdAt);
+  const isPlayable = voice.status === "trained";
+  return (
+    <div className="voice-row">
+      <div className="voice-row-main">
+        <div className="voice-row-name">{voice.displayName}</div>
+        <div className="voice-row-meta">
+          {voice.sampleSeconds ?? "?"}초 샘플 · {voice.epochs} epoch ·
+          {" "}
+          {created.toLocaleDateString("ko-KR")}
+        </div>
+        {voice.error && <div className="voice-row-error">{voice.error}</div>}
+      </div>
+      <div className={`voice-status ${status.cls}`}>{status.label}</div>
+      <button
+        className="btn-ghost voice-row-demo"
+        disabled
+        title={isPlayable ? "RVC 통합 후 사용 가능 (곧 추가됩니다)" : "학습 완료 후 사용 가능"}
+      >
+        <Icon name="play" size={14} /> 들어보기
+      </button>
+    </div>
+  );
+}

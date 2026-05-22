@@ -2118,6 +2118,224 @@ input, textarea {
   grid-template-columns: repeat(3, 1fr);
   gap: 12px;
 }
+
+/* ============================================================
+   Voice-clone page (Phase 1 of the musicai-stack pivot, ADR 0005)
+   ============================================================ */
+.voice-head {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin: 24px 0 4px;
+}
+.voice-head h1 {
+  font-size: 28px;
+  margin: 0;
+  font-weight: 700;
+}
+.voice-sub {
+  font-size: 14px;
+  color: rgba(0, 0, 0, 0.6);
+  margin: 0 0 24px;
+}
+.voice-beta-label {
+  color: var(--mou-accent-2);
+  font-weight: 500;
+}
+
+.voice-gate {
+  max-width: 480px;
+  margin: 80px auto;
+  text-align: center;
+  padding: 40px 24px;
+}
+.voice-gate-emoji {
+  font-size: 56px;
+  margin-bottom: 16px;
+}
+.voice-gate h1 {
+  font-size: 24px;
+  margin: 0 0 12px;
+}
+.voice-gate-sub {
+  font-size: 15px;
+  color: rgba(0, 0, 0, 0.65);
+  line-height: 1.6;
+  margin: 0 0 24px;
+}
+
+.voice-upload-card {
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 24px;
+}
+.voice-upload-head {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.voice-input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  background: white;
+  margin-bottom: 12px;
+  font-family: inherit;
+}
+.voice-input:focus {
+  outline: none;
+  border-color: var(--mou-accent);
+}
+.voice-input:disabled {
+  background: rgba(0, 0, 0, 0.04);
+  color: rgba(0, 0, 0, 0.4);
+}
+
+.voice-dropzone {
+  display: block;
+  cursor: pointer;
+}
+.voice-dropzone-inner {
+  border: 2px dashed rgba(0, 0, 0, 0.15);
+  border-radius: 10px;
+  padding: 24px;
+  text-align: center;
+  background: white;
+  transition: border-color 120ms;
+}
+.voice-dropzone:hover .voice-dropzone-inner {
+  border-color: var(--mou-accent);
+}
+.voice-dropzone-emoji {
+  font-size: 32px;
+  margin-bottom: 6px;
+}
+.voice-dropzone-main {
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+.voice-dropzone-hint {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.5);
+}
+.voice-file-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.6);
+}
+.voice-file-list li {
+  padding: 2px 0;
+}
+
+.voice-upload-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+.voice-upload-note {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.voice-cap-notice {
+  background: rgba(221, 91, 0, 0.08);
+  border: 1px solid rgba(221, 91, 0, 0.2);
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 13px;
+  margin-bottom: 24px;
+  color: rgba(0, 0, 0, 0.7);
+}
+
+.voice-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: rgba(0, 0, 0, 0.5);
+}
+.voice-empty .emoji {
+  font-size: 40px;
+  margin-bottom: 12px;
+}
+
+.voice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.voice-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 16px;
+  align-items: center;
+  padding: 14px 16px;
+  background: white;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 10px;
+}
+.voice-row-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.voice-row-meta {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.5);
+  margin-top: 2px;
+}
+.voice-row-error {
+  font-size: 12px;
+  color: #c0392b;
+  margin-top: 4px;
+}
+.voice-status {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.voice-status-pending {
+  background: rgba(0, 0, 0, 0.06);
+  color: rgba(0, 0, 0, 0.55);
+}
+.voice-status-training {
+  background: rgba(221, 91, 0, 0.12);
+  color: #b04800;
+  animation: voice-pulse 1.6s ease-in-out infinite;
+}
+.voice-status-trained {
+  background: rgba(46, 160, 67, 0.12);
+  color: #1a7f37;
+}
+.voice-status-failed {
+  background: rgba(192, 57, 43, 0.12);
+  color: #c0392b;
+}
+@keyframes voice-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.voice-row-demo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  font-size: 13px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 6px;
+}
+.voice-row-demo:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .plan-col {
   display: flex;
   flex-direction: column;

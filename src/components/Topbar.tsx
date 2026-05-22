@@ -50,6 +50,7 @@ export function Topbar({ page, onPage, usage, onHome, user, onLogin, onLogout, o
         <div className="topnav">
           <button className={page === "home" ? "active" : ""} onClick={() => onPage("home")}>탐험</button>
           <button className={page === "create" ? "active" : ""} onClick={() => onPage("create")}>🎹 커스텀</button>
+          <button className={page === "voice" ? "active" : ""} onClick={() => onPage("voice")}>🎤 내 보이스</button>
           <button className={page === "library" ? "active" : ""} onClick={() => onPage("library")}>내 라이브러리</button>
         </div>
       </div>
