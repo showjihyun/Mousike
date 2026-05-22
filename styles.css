@@ -1643,6 +1643,136 @@ input, textarea {
   margin-top: 4px;
 }
 
+/* ============================================================
+   Create page (Suno-style custom editor)
+   ============================================================ */
+.create-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 1040px;
+  margin: 0 auto;
+}
+.create-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 20px;
+}
+@media (max-width: 820px) {
+  .create-grid { grid-template-columns: 1fr; }
+}
+.create-left, .create-right {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-large);
+  box-shadow: var(--shadow-card);
+}
+.create-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semibold);
+  color: var(--fg);
+  margin-bottom: 4px;
+}
+.create-section-hint {
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-regular);
+  color: var(--fg-muted);
+  margin-left: auto;
+}
+.create-lyrics {
+  width: 100%;
+  flex: 1;
+  min-height: 360px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-standard);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+  background: white;
+  color: var(--fg);
+  resize: vertical;
+}
+.create-lyrics:focus-visible {
+  outline: 2px solid var(--mou-accent);
+  outline-offset: 1px;
+}
+.create-lyrics-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: var(--fs-caption);
+  color: var(--fg-muted);
+}
+.create-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.create-field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+  color: var(--fg-secondary);
+}
+.create-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-standard);
+  background: white;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+.create-input:focus-visible {
+  outline: 2px solid var(--mou-accent);
+  outline-offset: 1px;
+}
+.create-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.create-char-count {
+  align-self: flex-end;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.create-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+.create-submit {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--mou-ink);
+  color: white;
+  padding: 12px 22px;
+  border-radius: var(--radius-comfortable);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semibold);
+  letter-spacing: -0.1px;
+  transition: transform 120ms, opacity 120ms;
+}
+.create-submit:hover:not(:disabled) { transform: translateY(-1px); }
+.create-submit:active:not(:disabled) { transform: scale(0.97); }
+.create-submit:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .upgrade-card { max-width: 720px; }
 .plan-grid {
   display: grid;

@@ -28,6 +28,7 @@ import type { SongAction } from "./components/SongCard";
 import { Toast } from "./components/Toast";
 import { Topbar } from "./components/Topbar";
 import { SEED_GENERATIONS, makeGeneration } from "./data";
+import { CreatePage } from "./pages/CreatePage";
 import { HomePage } from "./pages/HomePage";
 import { LibraryPage } from "./pages/LibraryPage";
 import { loadAdvanced, loadCredits, loadGenerations, saveAdvanced, saveCredits, saveGenerations } from "./storage";
@@ -70,8 +71,35 @@ const LOADING_MESSAGES = [
 const TOAST_MS = 2200;
 const LOADING_MSG_INTERVAL_MS = 700;
 
+// Initial page from URL: /create → "create", everything else (including the
+// Toss /billing/* callbacks handled below) → "home". Keeps the state-based
+// page model intact while still letting users land directly on /create.
+function initialPage(): Page {
+  if (typeof window === "undefined") return "home";
+  return window.location.pathname === "/create" ? "create" : "home";
+}
+
 export function App() {
-  const [page, setPage] = useState<Page>("home");
+  const [page, setPageState] = useState<Page>(initialPage);
+
+  // Wrap setPage so nav clicks (탐험 / 커스텀 / 내 라이브러리) also rewrite the
+  // URL — letting users copy the link and share /create directly, and giving
+  // back/forward sane semantics. /create gets a real path; everything else
+  // collapses to /.
+  const setPage = useCallback((next: Page) => {
+    setPageState(next);
+    const path = next === "create" ? "/create" : "/";
+    if (window.location.pathname !== path) {
+      window.history.pushState({}, "", path);
+    }
+  }, []);
+
+  // popstate: user hits browser Back/Forward — sync local state from URL.
+  useEffect(() => {
+    const onPop = () => setPageState(initialPage());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   // Composer
   const [prompt, setPrompt] = useState("");
@@ -628,7 +656,7 @@ export function App() {
     : `${songLengthSec}초`;
 
   return (
-    <div className="app" data-screen-label={page === "home" ? "01 Home" : "02 Library"}>
+    <div className="app" data-screen-label={page === "home" ? "01 Home" : page === "create" ? "03 Create" : "02 Library"}>
       <Topbar
         page={page}
         onPage={setPage}
@@ -690,6 +718,21 @@ export function App() {
               onPause={handlePause}
               onAction={handleAction}
               onJumpToGen={handleJumpToGen}
+            />
+          )}
+          {page === "create" && (
+            <CreatePage
+              prompt={prompt}
+              setPrompt={setPrompt}
+              lang={lang}
+              setLang={setLang}
+              vocalLanguage={vocalLanguage}
+              setVocalLanguage={setVocalLanguage}
+              advanced={advanced}
+              setAdvanced={setAdvanced}
+              onSubmit={handleSubmit}
+              stage={stage}
+              songLengthLabel={songLengthLabel}
             />
           )}
         </div>
