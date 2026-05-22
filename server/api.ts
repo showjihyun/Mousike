@@ -10,9 +10,11 @@ import { requireAuth, type AuthUser } from "./auth.js";
 import { readUsage, tierEpochsForTraining, tierVoiceCap } from "./quota.js";
 import { renderCert } from "./cert.js";
 import { AUDIO_CACHE_DIR, AUDIO_SECURE_DIR, fileExists } from "./audio.js";
+import { enqueue } from "./jobs.js";
 import {
   ensureVoiceSampleDir,
   probeDurationSec,
+  purgeVoice,
   purgeVoiceSamples,
   voiceSampleRelative,
 } from "./voice-storage.js";
@@ -540,6 +542,117 @@ export function mountApi(app: Express): void {
       res.json(data);
     } catch (err) {
       respondServerError(res, "GET /api/voices/:id", err);
+    }
+  });
+
+  // Kick off training. The voice must be in 'uploading' (post-sample-upload)
+  // or 'failed' (retry) state — already-training and trained voices reject
+  // with 409 to avoid double-enqueuing GPU work.
+  app.post("/api/voices/:id/train", requireAuth, async (req, res) => {
+    const vid = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9]+$/.test(vid)) {
+      res.status(400).json({ error: "invalid voice id" });
+      return;
+    }
+    try {
+      const u = req.user as AuthUser;
+      const sb = getSupabase();
+      const { data, error } = await sb
+        .from("user_voices")
+        .select("id, status, epochs")
+        .eq("id", vid)
+        .eq("user_id", u.id)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) {
+        res.status(404).json({ error: "voice not found" });
+        return;
+      }
+      const row = data as { id: string; status: string; epochs: number };
+      if (row.status !== "uploading" && row.status !== "failed") {
+        res.status(409).json({
+          error: `voice cannot be trained in '${row.status}' state`,
+        });
+        return;
+      }
+      // 'failed' retry: clear the artifact columns so the paired CHECK
+      // stays consistent when the worker flips status back to 'training'.
+      if (row.status === "failed") {
+        await sb
+          .from("user_voices")
+          .update({ error: null })
+          .eq("id", row.id);
+      }
+      const jobId = await enqueue(u.id, "rvc_train", {
+        voiceId: row.id,
+        epochs: row.epochs,
+      });
+      res.status(202).json({ jobId });
+    } catch (err) {
+      respondServerError(res, "POST /api/voices/:id/train", err);
+    }
+  });
+
+  // Trigger a demo inference: trained voice over the canned backing track.
+  // Returns the job id; FE polls /api/jobs/:id (existing route) and plays
+  // the resulting audioUrl when status='done'.
+  app.post("/api/voices/:id/demo", requireAuth, async (req, res) => {
+    const vid = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9]+$/.test(vid)) {
+      res.status(400).json({ error: "invalid voice id" });
+      return;
+    }
+    try {
+      const u = req.user as AuthUser;
+      const sb = getSupabase();
+      const { data, error } = await sb
+        .from("user_voices")
+        .select("id, status")
+        .eq("id", vid)
+        .eq("user_id", u.id)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) {
+        res.status(404).json({ error: "voice not found" });
+        return;
+      }
+      const row = data as { id: string; status: string };
+      if (row.status !== "trained") {
+        res.status(409).json({
+          error: `voice must be 'trained' to play a demo (currently '${row.status}')`,
+        });
+        return;
+      }
+      const jobId = await enqueue(u.id, "rvc_infer", { voiceId: row.id });
+      res.status(202).json({ jobId });
+    } catch (err) {
+      respondServerError(res, "POST /api/voices/:id/demo", err);
+    }
+  });
+
+  // Hard delete. A training-in-flight job will fail when it tries to
+  // update the now-missing row — acceptable: the worker logs + marks the
+  // job failed, no data corruption. On-disk samples + .pth + .index are
+  // best-effort purged.
+  app.delete("/api/voices/:id", requireAuth, async (req, res) => {
+    const vid = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9]+$/.test(vid)) {
+      res.status(400).json({ error: "invalid voice id" });
+      return;
+    }
+    try {
+      const u = req.user as AuthUser;
+      const sb = getSupabase();
+      const { error } = await sb
+        .from("user_voices")
+        .delete()
+        .eq("id", vid)
+        .eq("user_id", u.id);
+      if (error) throw error;
+      await purgeVoice(u.id, vid);
+      res.status(204).end();
+    } catch (err) {
+      respondServerError(res, "DELETE /api/voices/:id", err);
     }
   });
 }

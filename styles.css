@@ -2323,7 +2323,12 @@ input, textarea {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
 }
-.voice-row-demo {
+.voice-row-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.voice-row-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -2331,10 +2336,19 @@ input, textarea {
   font-size: 13px;
   border: 1px solid rgba(0, 0, 0, 0.1);
   border-radius: 6px;
+  white-space: nowrap;
 }
-.voice-row-demo:disabled {
-  opacity: 0.45;
+.voice-row-btn:disabled {
+  opacity: 0.55;
   cursor: not-allowed;
+}
+.voice-row-delete {
+  padding: 6px 10px;
+  color: rgba(0, 0, 0, 0.4);
+}
+.voice-row-delete:hover {
+  color: #c0392b;
+  border-color: rgba(192, 57, 43, 0.4);
 }
 .plan-col {
   display: flex;

@@ -1,10 +1,18 @@
 // Voice-clone page — Phase 1 of the musicai-stack pivot (ADR 0005).
-// Upload 2-5 vocal samples → server trains an RVC model → the trained
-// voice can later be applied to a canned backing track via "들어보기"
-// (the demo button is rendered disabled until Commit C wires the
-// train/infer endpoints).
-import { useCallback, useEffect, useState } from "react";
-import { fetchVoices, uploadVoiceSamples, type UserVoice, type VoiceStatus } from "../api";
+// Upload 2-5 vocal samples → click 학습 시작 → server trains an RVC model →
+// click 들어보기 to hear the trained voice singing the canned backing
+// track. The 들어보기 result plays inline from an audio element scoped to
+// the active row.
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  deleteVoice,
+  fetchVoices,
+  requestVoiceDemo,
+  startVoiceTraining,
+  uploadVoiceSamples,
+  type UserVoice,
+  type VoiceStatus,
+} from "../api";
 import type { AuthUser, Tier } from "../auth";
 import { Icon } from "../components/Icon";
 
@@ -26,9 +34,18 @@ const TIER_EPOCHS: Record<Tier, number> = { free: 100, starter: 200, pro: 250 };
 
 const POLL_INTERVAL_MS = 5_000;
 
+interface DemoState {
+  voiceId: string;
+  status: "loading" | "ready" | "error";
+  audioUrl?: string;
+  error?: string;
+}
+
 export function VoicePage({ user, onRequireLogin, onShowToast }: VoicePageProps) {
   const [voices, setVoices] = useState<UserVoice[]>([]);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [demo, setDemo] = useState<DemoState | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
     if (!user) {
@@ -42,8 +59,6 @@ export function VoicePage({ user, onRequireLogin, onShowToast }: VoicePageProps)
         const list = await fetchVoices();
         if (!cancelled) setVoices(list);
       } catch (e) {
-        // Surface only the first-load failure — polling failures stay
-        // silent so transient network blips don't spam the toast.
         if (!cancelled && initial) {
           onShowToast(`보이스 목록 로드 실패: ${e instanceof Error ? e.message : ""}`);
         }
@@ -59,12 +74,75 @@ export function VoicePage({ user, onRequireLogin, onShowToast }: VoicePageProps)
     };
   }, [user, onShowToast]);
 
+  // Autoplay the demo once the audio element gets a fresh src. play() can
+  // reject if the browser blocks autoplay — surface that as a toast so
+  // the user knows to interact.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || demo?.status !== "ready" || !demo.audioUrl) return;
+    audio.src = demo.audioUrl;
+    audio.play().catch((e: unknown) => {
+      onShowToast(`재생 실패: ${e instanceof Error ? e.message : ""}`);
+    });
+  }, [demo, onShowToast]);
+
   const handleUploadSuccess = useCallback(
     (v: UserVoice) => {
       setVoices((vs) => [v, ...vs]);
-      onShowToast(`"${v.displayName}" 업로드 완료. 학습 트리거는 곧 추가됩니다.`);
+      onShowToast(`"${v.displayName}" 업로드 완료. 학습 시작 버튼을 눌러주세요.`);
     },
     [onShowToast],
+  );
+
+  const handleTrain = useCallback(
+    async (voiceId: string) => {
+      try {
+        await startVoiceTraining(voiceId);
+        onShowToast("학습 시작했어요. 완료까지 보통 10-25분.");
+        // Optimistic: flip the local row to training so the badge updates
+        // immediately instead of waiting up to 5s for the next poll tick.
+        setVoices((vs) =>
+          vs.map((v) => (v.id === voiceId ? { ...v, status: "training" as VoiceStatus, error: null } : v)),
+        );
+      } catch (e) {
+        onShowToast(`학습 시작 실패: ${e instanceof Error ? e.message : ""}`);
+      }
+    },
+    [onShowToast],
+  );
+
+  const handleDemo = useCallback(
+    async (voiceId: string) => {
+      setDemo({ voiceId, status: "loading" });
+      try {
+        const songs = await requestVoiceDemo(voiceId);
+        const url = songs[0]?.audioUrl;
+        if (!url) throw new Error("결과에 오디오가 없어요");
+        setDemo({ voiceId, status: "ready", audioUrl: url });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "";
+        setDemo({ voiceId, status: "error", error: msg });
+        onShowToast(`들어보기 실패: ${msg}`);
+      }
+    },
+    [onShowToast],
+  );
+
+  const handleDelete = useCallback(
+    async (voiceId: string, displayName: string) => {
+      if (!window.confirm(`"${displayName}" 보이스를 삭제할까요? 학습된 모델과 샘플이 모두 삭제됩니다.`)) {
+        return;
+      }
+      try {
+        await deleteVoice(voiceId);
+        setVoices((vs) => vs.filter((v) => v.id !== voiceId));
+        if (demo?.voiceId === voiceId) setDemo(null);
+        onShowToast("삭제했어요.");
+      } catch (e) {
+        onShowToast(`삭제 실패: ${e instanceof Error ? e.message : ""}`);
+      }
+    },
+    [demo, onShowToast],
   );
 
   if (!user) {
@@ -126,10 +204,20 @@ export function VoicePage({ user, onRequireLogin, onShowToast }: VoicePageProps)
       ) : (
         <div className="voice-list">
           {voices.map((v) => (
-            <VoiceRow key={v.id} voice={v} />
+            <VoiceRow
+              key={v.id}
+              voice={v}
+              demo={demo?.voiceId === v.id ? demo : null}
+              onTrain={() => handleTrain(v.id)}
+              onDemo={() => handleDemo(v.id)}
+              onDelete={() => handleDelete(v.id, v.displayName)}
+            />
           ))}
         </div>
       )}
+
+      {/* Single shared audio element — only one demo plays at a time. */}
+      <audio ref={audioRef} style={{ display: "none" }} controls={false} />
     </>
   );
 }
@@ -155,8 +243,6 @@ function UploadCard({ tier, onSuccess, onError }: UploadCardProps) {
 
   function pickFiles(fileList: FileList | null) {
     if (!fileList) return;
-    // Filter to mp3/wav even if the OS picker let other types through (some
-    // platforms ignore the accept= hint). Trim to 5 — BE rejects more.
     const list = Array.from(fileList)
       .filter((f) => /\.(mp3|wav)$/i.test(f.name))
       .slice(0, 5);
@@ -241,17 +327,24 @@ function UploadCard({ tier, onSuccess, onError }: UploadCardProps) {
           {submitting ? "업로드 중…" : "업로드"}
         </button>
         <span className="voice-upload-note">
-          업로드 후 자동 학습 (~{tier === "pro" ? 25 : tier === "starter" ? 20 : 10}분, 곧 추가)
+          업로드 후 학습 버튼을 눌러 시작 (~{tier === "pro" ? 25 : tier === "starter" ? 20 : 10}분 소요)
         </span>
       </div>
     </div>
   );
 }
 
-function VoiceRow({ voice }: { voice: UserVoice }) {
+interface VoiceRowProps {
+  voice: UserVoice;
+  demo: DemoState | null;
+  onTrain: () => void;
+  onDemo: () => void;
+  onDelete: () => void;
+}
+
+function VoiceRow({ voice, demo, onTrain, onDemo, onDelete }: VoiceRowProps) {
   const status = STATUS_LABELS[voice.status];
   const created = new Date(voice.createdAt);
-  const isPlayable = voice.status === "trained";
   return (
     <div className="voice-row">
       <div className="voice-row-main">
@@ -264,13 +357,32 @@ function VoiceRow({ voice }: { voice: UserVoice }) {
         {voice.error && <div className="voice-row-error">{voice.error}</div>}
       </div>
       <div className={`voice-status ${status.cls}`}>{status.label}</div>
-      <button
-        className="btn-ghost voice-row-demo"
-        disabled
-        title={isPlayable ? "RVC 통합 후 사용 가능 (곧 추가됩니다)" : "학습 완료 후 사용 가능"}
-      >
-        <Icon name="play" size={14} /> 들어보기
-      </button>
+      <div className="voice-row-actions">
+        {(voice.status === "uploading" || voice.status === "failed") && (
+          <button className="btn-ghost voice-row-btn" onClick={onTrain}>
+            {voice.status === "failed" ? "다시 시도" : "학습 시작"}
+          </button>
+        )}
+        {voice.status === "trained" && (
+          <button
+            className="btn-ghost voice-row-btn"
+            onClick={onDemo}
+            disabled={demo?.status === "loading"}
+            title={demo?.status === "loading" ? "처리 중… (1-2분)" : "들어보기"}
+          >
+            <Icon name="play" size={14} />
+            {demo?.status === "loading" ? "처리 중…" : "들어보기"}
+          </button>
+        )}
+        <button
+          className="btn-ghost voice-row-btn voice-row-delete"
+          onClick={onDelete}
+          aria-label="삭제"
+          title="삭제"
+        >
+          ✕
+        </button>
+      </div>
     </div>
   );
 }

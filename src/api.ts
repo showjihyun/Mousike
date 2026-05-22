@@ -319,6 +319,65 @@ export async function fetchVoices(): Promise<UserVoice[]> {
   return data.voices.map(toUserVoice);
 }
 
+export async function startVoiceTraining(voiceId: string): Promise<{ jobId: string }> {
+  let res: Response;
+  try {
+    res = await fetch(`${BACKEND_URL}/api/voices/${voiceId}/train`, {
+      method: "POST",
+      credentials: "include",
+    });
+  } catch (e) {
+    if (isNetworkError(e)) throw new Error(NETWORK_ERR_KO);
+    throw e;
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? `Backend error ${res.status}`);
+  }
+  return (await res.json()) as { jobId: string };
+}
+
+// Enqueue + poll combined — mirrors the repaint/lego shape. Returns the
+// rendered demo audio (BackendSong[]) when the rvc_infer job finishes.
+export async function requestVoiceDemo(
+  voiceId: string,
+  onProgress?: ProgressCallback,
+): Promise<BackendSong[]> {
+  let res: Response;
+  try {
+    res = await fetch(`${BACKEND_URL}/api/voices/${voiceId}/demo`, {
+      method: "POST",
+      credentials: "include",
+    });
+  } catch (e) {
+    if (isNetworkError(e)) throw new Error(NETWORK_ERR_KO);
+    throw e;
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? `Backend error ${res.status}`);
+  }
+  const { jobId } = (await res.json()) as { jobId: string };
+  return pollJob(jobId, onProgress);
+}
+
+export async function deleteVoice(voiceId: string): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`${BACKEND_URL}/api/voices/${voiceId}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+  } catch (e) {
+    if (isNetworkError(e)) throw new Error(NETWORK_ERR_KO);
+    throw e;
+  }
+  if (!res.ok && res.status !== 204) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error ?? `Backend error ${res.status}`);
+  }
+}
+
 export async function uploadVoiceSamples(
   displayName: string,
   files: File[],

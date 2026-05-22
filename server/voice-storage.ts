@@ -89,7 +89,23 @@ export async function purgeVoiceSamples(userId: string, voiceId: string): Promis
     await fsp.rm(voiceSampleDir(userId, voiceId), { recursive: true, force: true });
   } catch (err) {
     console.error(
-      `[voice-storage] purge ${userId}/${voiceId}:`,
+      `[voice-storage] purge samples ${userId}/${voiceId}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+// Full voice removal: samples + trained .pth/.index. Used by DELETE
+// /api/voices/:id. Same error-swallow stance as purgeVoiceSamples —
+// failing here leaves orphan files but never corrupts the DB row, which
+// is already gone by the time this is called.
+export async function purgeVoice(userId: string, voiceId: string): Promise<void> {
+  await purgeVoiceSamples(userId, voiceId);
+  try {
+    await fsp.rm(voiceModelDir(userId, voiceId), { recursive: true, force: true });
+  } catch (err) {
+    console.error(
+      `[voice-storage] purge model ${userId}/${voiceId}:`,
       err instanceof Error ? err.message : err,
     );
   }

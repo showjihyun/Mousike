@@ -13,9 +13,11 @@ import { randomBytes } from "crypto";
 import { getSupabase } from "./db.js";
 import { translateKoreanToEnglish } from "./ollama.js";
 import { runAceStep } from "./acestep.js";
-import { prepareSourceForAceStep, processAudio } from "./audio.js";
+import { prepareSourceForAceStep, processAudio, processAudioFromHost } from "./audio.js";
 import { applyGenreTag, genreByCategory, resolveGenre, withQualitySuffix, type GenreCategory } from "./genre.js";
 import { logUsage, type UsageAction } from "./quota.js";
+import { inferOnBackingTrack, trainVoice } from "./rvc.js";
+import { purgeVoiceSamples, resolveVoiceSamplePath } from "./voice-storage.js";
 
 const PORT = 8787;
 
@@ -505,14 +507,103 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
   }
 
   if (job.kind === "rvc_train") {
-    // Implementation lands in commit B (server/rvc.ts + server/voice-storage.ts).
-    // Stubbed here so the dispatch table is complete and the queue still
-    // accepts these kinds without crashing the worker.
-    throw new Error("rvc_train not yet implemented");
+    const p = job.payload as RvcTrainPayload;
+    if (!job.user_id) throw new Error("rvc_train requires an authenticated user");
+    const sb = getSupabase();
+    // Load the voice row + its sample paths. We snapshot only what we need
+    // for the training call; the row gets a full update on completion.
+    const { data: voiceRow, error: vErr } = await sb
+      .from("user_voices")
+      .select("id, user_id, sample_paths, display_name")
+      .eq("id", p.voiceId)
+      .eq("user_id", job.user_id)
+      .maybeSingle();
+    if (vErr) throw vErr;
+    if (!voiceRow) throw new Error(`voice ${p.voiceId} not found`);
+    const row = voiceRow as {
+      id: string;
+      user_id: string;
+      sample_paths: string[];
+      display_name: string;
+    };
+    const hostPaths = row.sample_paths.map(resolveVoiceSamplePath);
+
+    // Flip to 'training' so the FE poll surfaces the transition. The row
+    // is left with weight/index NULL — the paired-artifact CHECK
+    // (user_voices_artifacts_paired) tolerates this because status != 'trained'.
+    await sb
+      .from("user_voices")
+      .update({ status: "training" })
+      .eq("id", row.id);
+
+    console.log(`[job ${job.id}] rvc_train ${row.id} (${row.display_name}) ${p.epochs}ep`);
+    const { weightPath, indexPath } = await trainVoice({
+      userId: row.user_id,
+      voiceId: row.id,
+      sampleHostPaths: hostPaths,
+      epochs: p.epochs,
+    });
+
+    // Atomically flip to 'trained' with both artifacts set. The CHECK
+    // requires all three (weight_path, index_path, trained_at) together.
+    await sb
+      .from("user_voices")
+      .update({
+        status: "trained",
+        weight_path: weightPath,
+        index_path: indexPath,
+        trained_at: new Date().toISOString(),
+      })
+      .eq("id", row.id);
+
+    // Raw samples are no longer needed — the .pth + .index are the voice.
+    // Failure here is logged + swallowed by voice-storage.
+    await purgeVoiceSamples(row.user_id, row.id);
+
+    return { songs: [] };
   }
 
   if (job.kind === "rvc_infer") {
-    throw new Error("rvc_infer not yet implemented");
+    const p = job.payload as RvcInferPayload;
+    if (!job.user_id) throw new Error("rvc_infer requires an authenticated user");
+    const sb = getSupabase();
+    const { data: voiceRow, error: vErr } = await sb
+      .from("user_voices")
+      .select("id, display_name, status, weight_path, index_path")
+      .eq("id", p.voiceId)
+      .eq("user_id", job.user_id)
+      .maybeSingle();
+    if (vErr) throw vErr;
+    if (!voiceRow) throw new Error(`voice ${p.voiceId} not found`);
+    const row = voiceRow as {
+      id: string;
+      display_name: string;
+      status: string;
+      weight_path: string | null;
+      index_path: string | null;
+    };
+    if (row.status !== "trained" || !row.weight_path || !row.index_path) {
+      throw new Error(`voice ${row.id} is not trained (status=${row.status})`);
+    }
+
+    console.log(`[job ${job.id}] rvc_infer ${row.id} (${row.display_name})`);
+    const containerOutputHostPath = await inferOnBackingTrack({
+      weightPath: row.weight_path,
+      indexPath: row.index_path,
+    });
+
+    // The rvc.ts helper already copied the output off the container, so
+    // feed the host path directly to the from-host pipeline (skips the
+    // docker cp leg that processAudio normally does for ACE-Step).
+    const filenames = await processAudioFromHost([containerOutputHostPath]);
+
+    const songs: JobSong[] = filenames.map((filename, i) => ({
+      id: `voice-demo-${Date.now()}-${i}`,
+      audioUrl: audioUrl(filename),
+      prompt: `${row.display_name} 들어보기`,
+      vocalLanguage: "unknown",
+    }));
+    return { songs };
   }
 
   if (job.kind === "repaint") {
