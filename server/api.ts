@@ -1,12 +1,21 @@
 // Per-user data endpoints. All require an authenticated session.
 // Anonymous flows (generate, audio playback) are NOT routed through here.
-import type { Express, Request } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
+import { randomBytes } from "crypto";
+import { promises as fsp } from "fs";
 import { join } from "path";
+import multer from "multer";
 import { getSupabase } from "./db.js";
 import { requireAuth, type AuthUser } from "./auth.js";
-import { readUsage } from "./quota.js";
+import { readUsage, tierEpochsForTraining, tierVoiceCap } from "./quota.js";
 import { renderCert } from "./cert.js";
 import { AUDIO_CACHE_DIR, AUDIO_SECURE_DIR, fileExists } from "./audio.js";
+import {
+  ensureVoiceSampleDir,
+  probeDurationSec,
+  purgeVoiceSamples,
+  voiceSampleRelative,
+} from "./voice-storage.js";
 
 interface SongPayload {
   id: string;
@@ -345,5 +354,192 @@ export function mountApi(app: Express): void {
       }
     }
     res.download(join(AUDIO_CACHE_DIR, filename), filename);
+  });
+
+  // --- Voice-clone endpoints (Phase 1 of the musicai-stack pivot) -----------
+  // Upload writes raw samples to voice-samples/<uid>/<voiceId>/ on disk and
+  // inserts a user_voices row in 'uploading' state. The train trigger
+  // (POST /api/voices/:id/train) and the rvc_infer demo trigger live in
+  // commit C — they need rvc.ts wired into the worker dispatch first.
+
+  // 2-5 mp3/wav files, 30-180s total. Matches the musicai intake of "MR-less
+  // pure vocal recordings, 2-3+ tracks" but extended for self-serve where
+  // users might upload shorter individual takes.
+  const VOICE_UPLOAD_MIN_FILES = 2;
+  const VOICE_UPLOAD_MAX_FILES = 5;
+  const VOICE_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+  const VOICE_UPLOAD_MIN_SECONDS = 30;
+  const VOICE_UPLOAD_MAX_SECONDS = 180;
+  const VOICE_ALLOWED_EXTS = new Set([".mp3", ".wav"]);
+
+  const voiceUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      files: VOICE_UPLOAD_MAX_FILES,
+      fileSize: VOICE_UPLOAD_MAX_BYTES,
+    },
+  });
+
+  // Multer errors arrive via next(err), not throw — wrap so they map to
+  // 4xx instead of the default Express 500.
+  function handleVoiceMulter(req: Request, res: Response, next: NextFunction): void {
+    voiceUpload.array("files", VOICE_UPLOAD_MAX_FILES)(req, res, (err: unknown) => {
+      if (err) {
+        const code = (err as { code?: string }).code;
+        if (code === "LIMIT_FILE_SIZE") {
+          res.status(413).json({
+            error: `file too large (max ${VOICE_UPLOAD_MAX_BYTES / 1024 / 1024}MB per file)`,
+          });
+          return;
+        }
+        if (code === "LIMIT_FILE_COUNT" || code === "LIMIT_UNEXPECTED_FILE") {
+          res.status(400).json({ error: `too many files (max ${VOICE_UPLOAD_MAX_FILES})` });
+          return;
+        }
+        const msg = err instanceof Error ? err.message : "upload error";
+        res.status(400).json({ error: msg });
+        return;
+      }
+      next();
+    });
+  }
+
+  app.post("/api/voice-samples", requireAuth, handleVoiceMulter, async (req, res) => {
+    const u = req.user as AuthUser;
+    const displayName = String((req.body?.displayName as string | undefined) ?? "")
+      .trim()
+      .slice(0, 64);
+    if (!displayName) {
+      res.status(400).json({ error: "displayName required" });
+      return;
+    }
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    if (files.length < VOICE_UPLOAD_MIN_FILES) {
+      res.status(400).json({ error: `at least ${VOICE_UPLOAD_MIN_FILES} files required` });
+      return;
+    }
+    for (const f of files) {
+      const ext = ("." + (f.originalname.split(".").pop() ?? "")).toLowerCase();
+      if (!VOICE_ALLOWED_EXTS.has(ext)) {
+        res.status(400).json({ error: `unsupported file type: ${ext}` });
+        return;
+      }
+    }
+
+    const cap = tierVoiceCap(u.tier);
+    if (cap === 0) {
+      res.status(402).json({ error: "voice cloning requires a paid tier" });
+      return;
+    }
+
+    const voiceId = randomBytes(12).toString("hex");
+    let writtenDir: string | null = null;
+
+    try {
+      const sb = getSupabase();
+      // Tier cap — count rows that still "exist" from the user's POV.
+      // 'failed' rows are ignored so a botched training doesn't permanently
+      // consume a slot.
+      const { count: existing, error: cntErr } = await sb
+        .from("user_voices")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", u.id)
+        .neq("status", "failed");
+      if (cntErr) throw cntErr;
+      if ((existing ?? 0) >= cap) {
+        res.status(403).json({
+          error: `voice cap reached (${cap}). delete an existing voice first.`,
+        });
+        return;
+      }
+
+      writtenDir = await ensureVoiceSampleDir(u.id, voiceId);
+      const samplePaths: string[] = [];
+      let totalSec = 0;
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const ext = ("." + (f.originalname.split(".").pop() ?? "")).toLowerCase();
+        const filename = `sample-${i}${ext}`;
+        const absPath = join(writtenDir, filename);
+        await fsp.writeFile(absPath, f.buffer);
+        totalSec += await probeDurationSec(absPath);
+        samplePaths.push(voiceSampleRelative(u.id, voiceId, filename));
+      }
+      if (totalSec < VOICE_UPLOAD_MIN_SECONDS || totalSec > VOICE_UPLOAD_MAX_SECONDS) {
+        await purgeVoiceSamples(u.id, voiceId);
+        res.status(400).json({
+          error: `total sample duration ${Math.round(totalSec)}s out of range ` +
+            `${VOICE_UPLOAD_MIN_SECONDS}-${VOICE_UPLOAD_MAX_SECONDS}s`,
+        });
+        return;
+      }
+
+      const { error: insErr } = await sb.from("user_voices").insert({
+        id: voiceId,
+        user_id: u.id,
+        display_name: displayName,
+        sample_paths: samplePaths,
+        sample_seconds: Math.round(totalSec),
+        epochs: tierEpochsForTraining(u.tier),
+        status: "uploading",
+      });
+      if (insErr) {
+        await purgeVoiceSamples(u.id, voiceId);
+        throw insErr;
+      }
+      res.status(201).json({
+        voiceId,
+        sampleSeconds: Math.round(totalSec),
+        epochs: tierEpochsForTraining(u.tier),
+        status: "uploading",
+      });
+    } catch (err) {
+      if (writtenDir) await purgeVoiceSamples(u.id, voiceId);
+      respondServerError(res, "POST /api/voice-samples", err);
+    }
+  });
+
+  app.get("/api/voices", requireAuth, async (req, res) => {
+    try {
+      const sb = getSupabase();
+      const { data, error } = await sb
+        .from("user_voices")
+        .select(
+          "id, display_name, sample_seconds, epochs, status, error, created_at, trained_at",
+        )
+        .eq("user_id", userId(req))
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      res.json({ voices: data ?? [] });
+    } catch (err) {
+      respondServerError(res, "GET /api/voices", err);
+    }
+  });
+
+  app.get("/api/voices/:id", requireAuth, async (req, res) => {
+    const vid = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9]+$/.test(vid)) {
+      res.status(400).json({ error: "invalid voice id" });
+      return;
+    }
+    try {
+      const sb = getSupabase();
+      const { data, error } = await sb
+        .from("user_voices")
+        .select(
+          "id, display_name, sample_seconds, epochs, status, error, created_at, trained_at",
+        )
+        .eq("id", vid)
+        .eq("user_id", userId(req))
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) {
+        res.status(404).json({ error: "voice not found" });
+        return;
+      }
+      res.json(data);
+    } catch (err) {
+      respondServerError(res, "GET /api/voices/:id", err);
+    }
   });
 }

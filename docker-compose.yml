@@ -1,0 +1,32 @@
+# Phase 1 of the musicai-stack pivot (ADR 0004, 0005).
+# RVC voice-cloning service. ACE-Step is currently run via manual
+# `docker run` — when migrating it to compose, add an `ace-step:`
+# service block here on port 7860 and point the existing
+# server/acestep.ts client at the new container name.
+
+services:
+  rvc:
+    # The RVC-Project/Retrieval-based-Voice-Conversion-WebUI repo ships
+    # a Dockerfile but no published image. Build locally:
+    #   git clone https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI
+    #   cd Retrieval-based-Voice-Conversion-WebUI && docker build -t rvc-webui .
+    # Then `docker compose up rvc` here.
+    image: rvc-webui:latest
+    container_name: rvc
+    ports:
+      - "7865:7865"  # Gradio default. ACE-Step uses 7860 — no conflict.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      # Bind mounts so server/voice-storage.ts can read/write directly
+      # without docker cp shuttling. Paths inside the container match what
+      # RVC-Project's training scripts expect.
+      - ./server/voice-samples:/inputs
+      - ./server/voice-models:/weights
+      - ./server/voice-demo-backing:/backing:ro
+    restart: unless-stopped
