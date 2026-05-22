@@ -732,6 +732,15 @@ export function App() {
               setAdvanced={setAdvanced}
               onSubmit={handleSubmit}
               stage={stage}
+              loadingMsg={loadingMsg}
+              currentGen={currentGen}
+              playingId={playingId}
+              progress={progress}
+              onPlay={handlePlay}
+              onPause={handlePause}
+              onLike={handleLike}
+              onAction={handleAction}
+              onVariation={handleVariation}
               songLengthLabel={songLengthLabel}
             />
           )}

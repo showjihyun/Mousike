@@ -12,10 +12,16 @@ import {
   LYRICS_MAX_LEN,
   MUSICAL_KEYS,
   type AdvancedSettings,
+  type Generation,
   type GenreCategory,
+  type Song,
   type Stage,
+  type VariationType,
 } from "../types";
 import { Icon } from "../components/Icon";
+import { SkeletonCard } from "../components/SkeletonCard";
+import { SongCard, type SongAction } from "../components/SongCard";
+import { VariationTray } from "../components/VariationTray";
 
 interface CreatePageProps {
   prompt: string;
@@ -28,6 +34,15 @@ interface CreatePageProps {
   setAdvanced: (a: AdvancedSettings) => void;
   onSubmit: (e: FormEvent<HTMLFormElement>) => void;
   stage: Stage;
+  loadingMsg: string;
+  currentGen: Generation | null;
+  playingId: string | null;
+  progress: number;
+  onPlay: (id: string) => void;
+  onPause: () => void;
+  onLike: (id: string) => void;
+  onAction: (action: SongAction, song: Song) => void;
+  onVariation: (kind: VariationType) => void;
   songLengthLabel: string;
 }
 
@@ -47,12 +62,16 @@ const DURATION_OPTIONS: Array<{ value: AdvancedSettings["durationSec"]; label: s
 export function CreatePage(props: CreatePageProps) {
   const {
     prompt, setPrompt, lang, setLang, vocalLanguage, setVocalLanguage,
-    advanced, setAdvanced, onSubmit, stage, songLengthLabel,
+    advanced, setAdvanced, onSubmit, stage, loadingMsg, currentGen,
+    playingId, progress, onPlay, onPause, onLike, onAction, onVariation,
+    songLengthLabel,
   } = props;
 
   function patch<K extends keyof AdvancedSettings>(key: K, value: AdvancedSettings[K]) {
     setAdvanced({ ...advanced, [key]: value });
   }
+
+  const likedInCurrent = currentGen ? currentGen.songs.filter((s) => s.liked).length : 0;
 
   return (
     <form className="create-page" onSubmit={onSubmit}>
@@ -211,6 +230,41 @@ export function CreatePage(props: CreatePageProps) {
           )}
         </button>
       </div>
+
+      {(stage === "loading" || stage === "results") && (
+        <div className="create-result">
+          <div className="create-result-head">
+            <h3 className="create-result-title">
+              {stage === "loading" ? "곡을 만드는 중…" : "방금 만든 곡"}
+            </h3>
+            {stage === "loading" && loadingMsg && (
+              <span className="create-result-loading-msg">
+                <span className="loader-pulse" />
+                {loadingMsg}
+              </span>
+            )}
+          </div>
+          <div className="create-result-grid">
+            {stage === "loading"
+              ? <SkeletonCard delay={0} />
+              : currentGen?.songs.map((song) => (
+                  <SongCard
+                    key={song.id}
+                    song={song}
+                    isPlaying={playingId === song.id}
+                    progress={playingId === song.id ? progress : 0}
+                    onPlay={onPlay}
+                    onPause={onPause}
+                    onLike={onLike}
+                    onAction={onAction}
+                  />
+                ))}
+          </div>
+          {stage === "results" && likedInCurrent > 0 && (
+            <VariationTray likedCount={likedInCurrent} onVariation={onVariation} />
+          )}
+        </div>
+      )}
     </form>
   );
 }
