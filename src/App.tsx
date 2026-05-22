@@ -655,8 +655,45 @@ export function App() {
     ? `${Math.floor(songLengthSec / 60)}분`
     : `${songLengthSec}초`;
 
+  // /create takes over the whole viewport (sci-fi studio aesthetic) — it
+  // renders its own minimal HUD header instead of the shared Topbar and
+  // breaks out of .main's centered layout. Everything else keeps the app
+  // shell.
+  if (page === "create") {
+    return (
+      <div className="app sf-create-shell" data-screen-label="03 Create">
+        <CreatePage
+          onBack={() => setPage("home")}
+          usage={displayUsage}
+          prompt={prompt}
+          setPrompt={setPrompt}
+          lang={lang}
+          setLang={setLang}
+          vocalLanguage={vocalLanguage}
+          setVocalLanguage={setVocalLanguage}
+          advanced={advanced}
+          setAdvanced={setAdvanced}
+          onSubmit={handleSubmit}
+          stage={stage}
+          loadingMsg={loadingMsg}
+          currentGen={currentGen}
+          playingId={playingId}
+          progress={progress}
+          onPlay={handlePlay}
+          onPause={handlePause}
+          onLike={handleLike}
+          onAction={handleAction}
+          onVariation={handleVariation}
+          songLengthLabel={songLengthLabel}
+        />
+        <audio ref={audioRef} style={{ display: "none" }} />
+        <Toast message={toast} />
+      </div>
+    );
+  }
+
   return (
-    <div className="app" data-screen-label={page === "home" ? "01 Home" : page === "create" ? "03 Create" : "02 Library"}>
+    <div className="app" data-screen-label={page === "home" ? "01 Home" : "02 Library"}>
       <Topbar
         page={page}
         onPage={setPage}
@@ -718,30 +755,6 @@ export function App() {
               onPause={handlePause}
               onAction={handleAction}
               onJumpToGen={handleJumpToGen}
-            />
-          )}
-          {page === "create" && (
-            <CreatePage
-              prompt={prompt}
-              setPrompt={setPrompt}
-              lang={lang}
-              setLang={setLang}
-              vocalLanguage={vocalLanguage}
-              setVocalLanguage={setVocalLanguage}
-              advanced={advanced}
-              setAdvanced={setAdvanced}
-              onSubmit={handleSubmit}
-              stage={stage}
-              loadingMsg={loadingMsg}
-              currentGen={currentGen}
-              playingId={playingId}
-              progress={progress}
-              onPlay={handlePlay}
-              onPause={handlePause}
-              onLike={handleLike}
-              onAction={handleAction}
-              onVariation={handleVariation}
-              songLengthLabel={songLengthLabel}
             />
           )}
         </div>
