@@ -1,9 +1,11 @@
 # Wedge: 한국어 구간 재생성 — 6주 액션 플랜
 
+> **⚠️ SUPERSEDED 2026-05-22 by [ADR 0004](../adr/0004-pivot-to-musicai-stack.md).** This plan is retained for context only. Mousike's positioning shifted from "Suno-bridge wedge" to a musicai-style full-stack (voice clone → cover → 자작곡 → 발매 linkout) on the same day this plan was committed. The wedge's "explicitly not doing" list (LoRA / cover / distribution) is now inverted into the active roadmap. Do not start new work from this document — see ADR 0004 for the current phase plan.
+
 > **작성**: 2026-05-22
-> **상태**: Draft v0.1
+> **상태**: ~~Draft v0.1~~ SUPERSEDED
 > **연계 문서**: `docs/plan/acestep-ui-design-plan.md` (전체 UI 전략), `docs/plan/master-canvas.md` (Master 모드)
-> **포지셔닝**: "Suno로 만든 곡을 한국어로 부분만 다시 만지는 가장 매끄러운 서비스"
+> **포지셔닝**: ~~"Suno로 만든 곡을 한국어로 부분만 다시 만지는 가장 매끄러운 서비스"~~ (포지셔닝 변경 — ADR 0004 참조)
 
 ---
 
