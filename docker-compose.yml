@@ -24,9 +24,25 @@ services:
               capabilities: [gpu]
     volumes:
       # Bind mounts so server/voice-storage.ts can read/write directly
-      # without docker cp shuttling. Paths inside the container match what
-      # RVC-Project's training scripts expect.
-      - ./server/voice-samples:/inputs
-      - ./server/voice-models:/weights
-      - ./server/voice-demo-backing:/backing:ro
+      # without docker cp shuttling. Container-side paths match RVC's
+      # Dockerfile layout (FROM nvidia/cuda + WORKDIR /app):
+      #   - dataset path is freeform — we pass /app/dataset/<uid>/<vid>
+      #     as the trainset_dir4 arg to train1key
+      #   - weights live at /app/assets/weights/ (RVC writes final .pth
+      #     and added_IVF*.index here)
+      #   - backing track read-only; rvc.ts passes /app/backing/<file>
+      #     as the input_audio_path arg to vc_single
+      - ./server/voice-samples:/app/dataset
+      - ./server/voice-models:/app/assets/weights
+      - ./server/voice-train-logs:/app/logs
+      - ./server/voice-demo-backing:/app/backing:ro
+      # Python wrapper that runs train1key via `docker exec`. RVC's
+      # Gradio 3.34 generator-based training can't be driven via raw HTTP
+      # (queue=None + first-yield-only behavior), so server/rvc.ts spawns
+      # `docker exec rvc python /runner/train.py <json-args>` instead.
+      - ./server/rvc-runner:/runner:ro
+      # PyTorch 2.6+ weights_only patch — see sitecustomize.py header.
+      # Mounted directly into Python's site-packages so it auto-loads
+      # for the main Gradio server AND every spawned training subprocess.
+      - ./server/rvc-runner/sitecustomize.py:/usr/lib/python3.9/sitecustomize.py:ro
     restart: unless-stopped

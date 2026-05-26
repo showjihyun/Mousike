@@ -26,10 +26,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export const VOICE_SAMPLES_DIR = join(__dirname, "voice-samples");
 export const VOICE_MODELS_DIR = join(__dirname, "voice-models");
+export const VOICE_TRAIN_LOGS_DIR = join(__dirname, "voice-train-logs");
 export const VOICE_DEMO_BACKING_DIR = join(__dirname, "voice-demo-backing");
 
 mkdirSync(VOICE_SAMPLES_DIR, { recursive: true });
 mkdirSync(VOICE_MODELS_DIR, { recursive: true });
+mkdirSync(VOICE_TRAIN_LOGS_DIR, { recursive: true });
 mkdirSync(VOICE_DEMO_BACKING_DIR, { recursive: true });
 
 // userId is a uuid (hyphens), voiceId is 24 hex from crypto.randomBytes,
@@ -59,7 +61,9 @@ export function voiceIndexPath(userId: string, voiceId: string): string {
   return join(voiceModelDir(userId, voiceId), "model.index");
 }
 
-export const DEMO_BACKING_FILE = join(VOICE_DEMO_BACKING_DIR, "default.mp3");
+// Either .mp3 or .wav — RVC's vc_single dispatches on the file
+// extension, so the filename's suffix MUST match the actual codec.
+export const DEMO_BACKING_FILE = join(VOICE_DEMO_BACKING_DIR, "default.wav");
 
 // Relative form is what gets stored in user_voices.sample_paths. Keeping
 // the column portable means a server move doesn't break existing rows;

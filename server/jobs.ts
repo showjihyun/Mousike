@@ -537,30 +537,42 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       .eq("id", row.id);
 
     console.log(`[job ${job.id}] rvc_train ${row.id} (${row.display_name}) ${p.epochs}ep`);
-    const { weightPath, indexPath } = await trainVoice({
-      userId: row.user_id,
-      voiceId: row.id,
-      sampleHostPaths: hostPaths,
-      epochs: p.epochs,
-    });
+    try {
+      const { weightPath, indexPath } = await trainVoice({
+        userId: row.user_id,
+        voiceId: row.id,
+        sampleHostPaths: hostPaths,
+        epochs: p.epochs,
+      });
 
-    // Atomically flip to 'trained' with both artifacts set. The CHECK
-    // requires all three (weight_path, index_path, trained_at) together.
-    await sb
-      .from("user_voices")
-      .update({
-        status: "trained",
-        weight_path: weightPath,
-        index_path: indexPath,
-        trained_at: new Date().toISOString(),
-      })
-      .eq("id", row.id);
+      // Atomically flip to 'trained' with both artifacts set. The CHECK
+      // requires all three (weight_path, index_path, trained_at) together.
+      await sb
+        .from("user_voices")
+        .update({
+          status: "trained",
+          weight_path: weightPath,
+          index_path: indexPath,
+          trained_at: new Date().toISOString(),
+        })
+        .eq("id", row.id);
 
-    // Raw samples are no longer needed — the .pth + .index are the voice.
-    // Failure here is logged + swallowed by voice-storage.
-    await purgeVoiceSamples(row.user_id, row.id);
+      // Raw samples are no longer needed — the .pth + .index are the voice.
+      // Failure here is logged + swallowed by voice-storage.
+      await purgeVoiceSamples(row.user_id, row.id);
 
-    return { songs: [] };
+      return { songs: [] };
+    } catch (e) {
+      // Mirror the job failure onto the voice row so the FE doesn't show
+      // a perpetually-spinning "학습 중" badge for a job that died. The
+      // jobs table gets its own failed flip via workerTick's catch.
+      const errMsg = e instanceof Error ? e.message : String(e);
+      await sb
+        .from("user_voices")
+        .update({ status: "failed", error: errMsg.slice(0, 500) })
+        .eq("id", row.id);
+      throw e;
+    }
   }
 
   if (job.kind === "rvc_infer") {

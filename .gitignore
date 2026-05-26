@@ -27,3 +27,11 @@ gate*.png
 # Claude Code per-user state (permissions, env). Skills are still tracked.
 .claude/settings.local.json
 .gstack/
+
+# RVC voice-clone runtime data + artifacts (source lives in server/rvc-runner/)
+server/voice-models/
+server/voice-samples/
+server/voice-train-logs/
+server/voice-demo-backing/*.wav
+server/voice-demo-backing/*.mp3
+voice/

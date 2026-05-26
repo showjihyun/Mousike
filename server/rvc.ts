@@ -1,37 +1,32 @@
-// RVC voice-clone client. Talks to the local Docker container via Gradio
-// HTTP (same pattern as acestep.ts) at port 7865, with bind-mounted
-// voice-samples/ and voice-models/ directories for input/output exchange.
+// RVC voice-clone client. Two transports, picked per workload:
 //
-// === BEFORE THIS WORKS END-TO-END (verify your RVC version) ===
+//   • Training (trainVoice) → `docker exec … /runner/train.py`.
+//     train1key fans out into long subprocesses (preprocess → f0 →
+//     feature-extract → train → index) over ~15-25 min, and Gradio
+//     3.34's queue drops the socket mid-run — observed repeatedly as
+//     "Gradio WS closed unexpectedly (fn=15)". Driving the generator
+//     inside a subprocess removes the socket as a failure point.
 //
-// 1. The container must expose Gradio at localhost:7865 with these
-//    function names registered:
-//       train1key   — one-click training pipeline
-//       vc_single   — single-file voice conversion (inference)
-//    Verify via:
-//       curl -s http://localhost:7865/info | jq '.named_endpoints | keys'
-//    If your fork uses different names (some forks rename to
-//    `train_one_click`, `infer_one`, etc.), update FN_TRAIN / FN_INFER
-//    below and the parameter lists.
+//   • Inference (inferOnBackingTrack) → Gradio v3 WebSocket queue.
+//     RVC's infer fns are Python generators too, but each completes in
+//     seconds, so the queue protocol (ws://host/queue/join) drives them
+//     to completion reliably. The simpler /api/<fn> route can't: it
+//     calls a generator's __next__() once then GCs it, so the rest of
+//     the pipeline never runs.
 //
-// 2. Bind mounts in docker-compose.yml must match:
-//       ./server/voice-samples       →  /inputs
-//       ./server/voice-models        →  /weights
-//       ./server/voice-demo-backing  →  /backing  (read-only)
-//    If you ran the container with `docker run` and no mounts, switch
-//    `useBindMounts` to false and we'll fall back to docker cp shuttling
-//    (slower but works on any container).
-//
-// 3. Training writes to /weights/<voiceId>.pth and an index file at
-//    /weights/added_IVF*<voiceId>*.index — RVC's index naming is
-//    unfortunate. resolveTrainedArtifacts handles the discovery.
-import { execFile } from "child_process";
+// Fn indices below were captured via `curl /config | jq` (see git
+// history for the probe). They're stable as long as RVC's infer-web.py
+// UI block order doesn't change.
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
+import { randomBytes } from "crypto";
 import { promises as fsp } from "fs";
 import { basename, posix as pposix, relative as pathRelative, sep as pathSep } from "path";
+import WebSocket from "ws";
 import {
   DEMO_BACKING_FILE,
   VOICE_MODELS_DIR,
+  VOICE_TRAIN_LOGS_DIR,
   voiceIndexPath,
   voiceModelDir,
   voiceWeightPath,
@@ -39,76 +34,153 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-const RVC_URL = "http://localhost:7865";
+const RVC_CONTAINER = "rvc";
+const GRADIO_HOST = "localhost:7865";
+const GRADIO_WS_URL = `ws://${GRADIO_HOST}/queue/join`;
 
-// Gradio fn names — adjust here if your RVC version differs (see header).
-const FN_TRAIN = "train1key";
-const FN_INFER = "vc_single";
+// fn_index from RVC's /config. Update if the Gradio UI's component order changes.
+const FN_INFER_LOAD = 5;      // infer_change_voice
+const FN_INFER = 2;           // infer_convert
 
-// Container-side mount points. Match docker-compose.yml.
-const MOUNT_INPUTS = "/inputs";
-const MOUNT_WEIGHTS = "/weights";
-const MOUNT_BACKING = "/backing";
+// Training runner inside the rvc container, mounted by docker-compose
+// (./server/rvc-runner:/runner:ro). Drives train1key to completion.
+const TRAIN_RUNNER = "/runner/train.py";
 
-// Submit handshake is fast; training/inference is the long pole.
-const SUBMIT_TIMEOUT_MS = 30_000;
-const TRAIN_TIMEOUT_MS = 45 * 60_000;  // Pro 250ep at ~10s/epoch + pipeline overhead
-const INFER_TIMEOUT_MS = 5 * 60_000;   // ~1-2min for a 30-60s backing track
+const MOUNT_INPUTS = "/app/dataset";
+const MOUNT_WEIGHTS = "/app/assets/weights";
+const MOUNT_BACKING = "/app/backing";
 
-// Mirror for the demo backing track (single fixed file inside /backing).
+const TRAIN_TIMEOUT_MS = 60 * 60_000;
+const INFER_TIMEOUT_MS = 5 * 60_000;
+const INFER_LOAD_TIMEOUT_MS = 60_000;
+
 const BACKING_CONTAINER_PATH = pposix.join(MOUNT_BACKING, basename(DEMO_BACKING_FILE));
 
-interface GradioSubmitResponse {
-  event_id: string;
+interface GradioWsOptions {
+  fnIndex: number;
+  data: unknown[];
+  timeoutMs: number;
+  // Optional progress callback for generator functions. Called once per
+  // process_generating message with the most recent yield's first element
+  // stringified.
+  onProgress?: (status: string) => void;
 }
 
-// Generic Gradio fn invoker. Mirrors acestep.ts's submit + SSE-poll loop
-// but parameterized for any fn name.
-async function callGradio(fnName: string, data: unknown[], pollTimeoutMs: number): Promise<unknown> {
-  const submitRes = await fetch(`${RVC_URL}/gradio_api/call/${fnName}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ data }),
-    signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
-  });
-  if (!submitRes.ok) {
-    throw new Error(`RVC submit ${fnName}: HTTP ${submitRes.status}`);
-  }
-  const { event_id } = (await submitRes.json()) as GradioSubmitResponse;
-  return pollSse(`${RVC_URL}/gradio_api/call/${fnName}/${event_id}`, pollTimeoutMs);
-}
+// Drives Gradio's queue protocol over a single WebSocket. Resolves with
+// the array of values from the final process_completed message; rejects
+// on transport errors, timeout, or success=false from the server.
+//
+// The Gradio 3.34 queue handshake:
+//   1. server → {msg: "send_hash"}
+//   2. client → {session_hash, fn_index}
+//   3. server → {msg: "estimation", rank, queue_size, ...}     (1+ times)
+//   4. server → {msg: "send_data"}
+//   5. client → {session_hash, fn_index, data, event_data: null}
+//   6. server → {msg: "process_starts"}
+//   7. server → {msg: "process_generating", output: {data: [...]}}  (0+ times for generators)
+//   8. server → {msg: "process_completed", success, output: {data, ...}}
+function gradioWsCall(opts: GradioWsOptions): Promise<unknown[]> {
+  return new Promise<unknown[]>((resolve, reject) => {
+    const ws = new WebSocket(GRADIO_WS_URL);
+    const sessionHash = randomBytes(8).toString("hex");
+    let settled = false;
+    // Track the latest process_generating output — Gradio 3.34's queue
+    // often closes the WS (code 1000) instead of sending a final
+    // process_completed message when a generator function returns. Use
+    // the last yield as the "result" in that case.
+    let lastGenerating: unknown[] | null = null;
+    let sawCompletion = false;  // saw success=true completion (not error)
 
-async function pollSse(url: string, timeoutMs: number): Promise<unknown> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-  if (!res.ok) throw new Error(`RVC poll: HTTP ${res.status}`);
-  if (!res.body) throw new Error("RVC poll: no body");
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { ws.close(); } catch { /* ignore */ }
+      fn();
+    };
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let lastDataLine = "";
-  let lastEventType = "";
+    const timer = setTimeout(() => {
+      settle(() => reject(new Error(`Gradio WS timeout after ${Math.round(opts.timeoutMs / 60000)}min (fn=${opts.fnIndex})`)));
+    }, opts.timeoutMs);
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (line.startsWith("event: ")) {
-        lastEventType = line.slice(7).trim();
-      } else if (line.startsWith("data: ")) {
-        lastDataLine = line.slice(6).trim();
-        if (lastEventType === "error") {
-          throw new Error(`RVC generation error: ${lastDataLine}`);
-        }
+    ws.on("error", (err: Error) => {
+      settle(() => reject(new Error(`Gradio WS transport: ${err.message}`)));
+    });
+
+    ws.on("close", (code: number) => {
+      // Gradio 3.34 frequently closes with code 1000 after the generator
+      // finishes (with or without a preceding process_completed). Accept
+      // that as success; the caller verifies the actual artifact on disk.
+      if (code === 1000) {
+        settle(() => resolve(lastGenerating ?? []));
+      } else {
+        settle(() => reject(new Error(`Gradio WS closed code=${code} (fn=${opts.fnIndex})`)));
       }
-    }
-    if (lastEventType === "complete") break;
-  }
-  if (!lastDataLine) throw new Error("RVC: no data received from SSE");
-  return JSON.parse(lastDataLine);
+    });
+
+    ws.on("message", (raw: WebSocket.RawData) => {
+      let msg: { msg?: string; output?: { data?: unknown[]; error?: string }; success?: boolean };
+      try {
+        msg = JSON.parse(raw.toString());
+      } catch (err) {
+        settle(() => reject(new Error(`Gradio WS bad JSON: ${(err as Error).message}`)));
+        return;
+      }
+      void sawCompletion;  // silence "set but not read" if all paths use close fallback
+
+      switch (msg.msg) {
+        case "send_hash":
+          ws.send(JSON.stringify({ session_hash: sessionHash, fn_index: opts.fnIndex }));
+          break;
+
+        case "send_data":
+          ws.send(JSON.stringify({
+            session_hash: sessionHash,
+            fn_index: opts.fnIndex,
+            data: opts.data,
+            event_data: null,
+          }));
+          break;
+
+        case "process_generating":
+          if (Array.isArray(msg.output?.data)) {
+            lastGenerating = msg.output.data;
+            if (opts.onProgress) {
+              const first = msg.output.data[0];
+              const text = typeof first === "string" ? first : JSON.stringify(first);
+              const lastLine = text.split("\n").filter((l) => l.trim()).pop() ?? "";
+              if (lastLine) opts.onProgress(lastLine);
+            }
+          }
+          break;
+
+        case "process_completed":
+          // For some generators Gradio sends this; for others it just
+          // closes the WS. Treat success=false as definitive failure,
+          // otherwise resolve here (close handler is the fallback).
+          if (msg.success === false) {
+            const errStr = msg.output?.error ?? JSON.stringify(msg.output ?? {});
+            settle(() => reject(new Error(`Gradio fn=${opts.fnIndex} failed: ${String(errStr).slice(0, 400)}`)));
+          } else {
+            sawCompletion = true;
+            const data = (msg.output?.data ?? []) as unknown[];
+            settle(() => resolve(data));
+          }
+          break;
+
+        // estimation / process_starts / queue_full are informational; the
+        // queue_full case is the one to optionally surface — Gradio will
+        // close the socket itself if it can't accept us.
+        case "queue_full":
+          settle(() => reject(new Error("Gradio queue full")));
+          break;
+
+        default:
+          // estimation, process_starts, etc. — drop silently.
+          break;
+      }
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -118,12 +190,12 @@ async function pollSse(url: string, timeoutMs: number): Promise<unknown> {
 export interface TrainOptions {
   userId: string;
   voiceId: string;
-  sampleHostPaths: string[];  // absolute host paths under voice-samples/
+  sampleHostPaths: string[];
   epochs: number;
 }
 
 export interface TrainResult {
-  weightPath: string;  // absolute host path under voice-models/
+  weightPath: string;
   indexPath: string;
 }
 
@@ -131,67 +203,157 @@ export async function trainVoice(opts: TrainOptions): Promise<TrainResult> {
   if (opts.sampleHostPaths.length === 0) {
     throw new Error("no samples provided for training");
   }
-  // RVC's train1key takes a *directory* of samples, not individual files —
-  // its preprocess step walks the dir. All samples for one voice already
-  // live under the same dir per voice-storage.ts's layout.
-  const sampleDirContainer = pposix.join(
-    MOUNT_INPUTS,
-    opts.userId,
-    opts.voiceId,
-  );
+  const sampleDirContainer = pposix.join(MOUNT_INPUTS, opts.userId, opts.voiceId);
 
-  // === ASSUMPTION: train1key parameter list (RVC-Project main ~2024) ===
-  // If your fork has a different signature, this is the list to adjust.
-  // The internal Python signature lives in infer-web.py near `train1key =`.
-  const trainArgs = [
-    opts.voiceId,        // 0  exp_dir1 — model name, also the output stem under /weights
-    "40k",               // 1  sr2 — sample rate
-    true,                // 2  if_f0_3 — use pitch (singing needs this)
-    sampleDirContainer,  // 3  trainset_dir4 — input directory inside container
-    0,                   // 4  spk_id5 — single speaker
-    1,                   // 5  np7 — num parallel preprocess workers
-    "rmvpe",             // 6  f0method8 — pitch extraction method (good default)
-    opts.epochs,         // 7  save_epoch10 — save every N epochs
-    opts.epochs,         // 8  total_epoch11 — total epochs (Free 100 / Starter 200 / Pro 250)
-    7,                   // 9  batch_size12 — 7 fits ~8GB VRAM headroom
-    true,                // 10 if_save_latest13 — keep only the final .pth
-    "",                  // 11 pretrained_G14 — empty = use default
-    "",                  // 12 pretrained_D15 — empty = use default
-    "0",                 // 13 gpus16 — GPU index
-    false,               // 14 if_cache_gpu17 — cache off (samples small)
-    false,               // 15 if_save_every_weights18 — only need final
-    "v2",                // 16 version19 — RVC v2
-    "0",                 // 17 gpus_rmvpe21 — RMVPE pitch GPU index
+  // train1key signature (18 args), passed straight through to
+  // train1key(*args) by /runner/train.py. Verified via Gradio /info
+  // introspection — Radio fields that look boolean ([10],[14],[15]) take
+  // "Yes"/"No" strings; [2] pitch-guidance does take a Python bool.
+  const data = [
+    opts.voiceId,        // 0  experiment name → .pth stem
+    "40k",               // 1  sample rate
+    true,                // 2  pitch guidance (Radio: True/False bool)
+    sampleDirContainer,  // 3  training folder
+    0,                   // 4  speaker ID
+    1,                   // 5  CPU processes
+    "rmvpe",             // 6  pitch algorithm
+    5,                   // 7  save_every_epoch (1-50)
+    opts.epochs,         // 8  total_epoch
+    7,                   // 9  batch size per GPU (fits 12GB VRAM)
+    "Yes",               // 10 save only latest .ckpt
+    "",                  // 11 pretrained G (default bundled)
+    "",                  // 12 pretrained D (default bundled)
+    "0",                 // 13 GPU index
+    "No",                // 14 cache training set to GPU memory
+    "Yes",               // 15 save small final model to weights/
+    "v2",                // 16 RVC version
+    "0-0",               // 17 RMVPE GPU index
   ];
 
-  await callGradio(FN_TRAIN, trainArgs, TRAIN_TIMEOUT_MS);
+  console.log(`[rvc] train begin (voice=${opts.voiceId}, epochs=${opts.epochs})`);
+  await runTrainer(data);
 
-  // RVC writes weight + index files into /weights/. The exact filenames
-  // depend on version; resolve them by globbing the host-side mount.
   return resolveTrainedArtifacts(opts.userId, opts.voiceId);
 }
 
-// Discover the .pth weight + .index file that train1key wrote. RVC's index
-// naming includes the version + speaker count (e.g.
-// "added_IVF256_Flat_nprobe_1_<voiceId>_v2.index"), so we glob rather than
-// pin a literal name. The weight is named directly after `exp_dir1`.
+// Drives train1key to completion in the rvc container via
+// `docker exec … /runner/train.py '<json-18-args>'`. The runner prints
+// one line per generator yield and a __TRAIN_DONE__ sentinel at the end;
+// we stream those to the log. Exit code is the gate, but
+// resolveTrainedArtifacts() is the real success check — it verifies the
+// .pth/.index actually landed on disk.
+function runTrainer(args: unknown[]): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(
+      "docker",
+      ["exec", RVC_CONTAINER, "python", TRAIN_RUNNER, JSON.stringify(args)],
+      { windowsHide: true },
+    );
+
+    let stdoutBuf = "";
+    let stderrTail = "";
+    let sawDone = false;
+    let settled = false;
+
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { child.kill(); } catch { /* already exited */ }
+      fn();
+    };
+
+    const timer = setTimeout(() => {
+      settle(() => reject(new Error(`train.py timed out after ${Math.round(TRAIN_TIMEOUT_MS / 60000)}min`)));
+    }, TRAIN_TIMEOUT_MS);
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdoutBuf += chunk.toString();
+      let nl: number;
+      while ((nl = stdoutBuf.indexOf("\n")) >= 0) {
+        const line = stdoutBuf.slice(0, nl).trimEnd();
+        stdoutBuf = stdoutBuf.slice(nl + 1);
+        if (!line) continue;
+        if (line.includes("__TRAIN_DONE__")) { sawDone = true; continue; }
+        console.log(`[rvc/train] ${line}`);
+      }
+    });
+
+    // RVC logs progress bars + warnings to stderr; keep only the tail for
+    // failure diagnostics rather than treating any stderr as fatal.
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrTail = (stderrTail + chunk.toString()).slice(-2000);
+    });
+
+    child.on("error", (err) => {
+      settle(() => reject(new Error(`docker exec spawn failed: ${err.message}`)));
+    });
+
+    child.on("close", (code) => {
+      if (code === 0) {
+        if (!sawDone) console.warn("[rvc/train] exited 0 without __TRAIN_DONE__ — verifying artifacts anyway");
+        settle(() => resolve());
+      } else {
+        settle(() => reject(new Error(`train.py exited code=${code}: ${stderrTail.slice(-400)}`)));
+      }
+    });
+  });
+}
+
 async function resolveTrainedArtifacts(userId: string, voiceId: string): Promise<TrainResult> {
-  // Canonical destination paths we want the artifacts at.
   const wantWeight = voiceWeightPath(userId, voiceId);
   const wantIndex = voiceIndexPath(userId, voiceId);
   await fsp.mkdir(voiceModelDir(userId, voiceId), { recursive: true });
 
-  // RVC writes to the root of /weights/ (mapped to VOICE_MODELS_DIR on host).
-  const entries = await fsp.readdir(VOICE_MODELS_DIR);
-  const weightSrc = entries.find((f) => f === `${voiceId}.pth`);
-  const indexSrc = entries.find((f) => f.includes(voiceId) && f.endsWith(".index"));
-  if (!weightSrc) throw new Error(`RVC training finished but no weight file found for ${voiceId}`);
-  if (!indexSrc) throw new Error(`RVC training finished but no index file found for ${voiceId}`);
+  // runTrainer resolves only after train.py exits, by which point RVC has
+  // written the final small model to weights/ (→ voice-models/ root). Poll
+  // rather than stat-once as a safety net for fs-flush latency and the
+  // "exited 0 without __TRAIN_DONE__" edge; normally hits on the first try.
+  const weightSrc = `${VOICE_MODELS_DIR}/${voiceId}.pth`;
+  const POLL_MS = 10_000;
+  const deadline = Date.now() + TRAIN_TIMEOUT_MS - 30_000;
+  let weightFound = false;
+  while (Date.now() < deadline) {
+    try { await fsp.access(weightSrc); weightFound = true; break; } catch { /* not yet */ }
+    await new Promise((r) => setTimeout(r, POLL_MS));
+  }
+  if (!weightFound) {
+    throw new Error(`training timed out — ${voiceId}.pth never appeared after ${Math.round(TRAIN_TIMEOUT_MS / 60000)}min`);
+  }
+  await fsp.rename(weightSrc, wantWeight);
 
-  // Move (rename) the loose artifacts into the per-voice subdir so we don't
-  // accumulate root-level files as more voices train.
-  await fsp.rename(`${VOICE_MODELS_DIR}/${weightSrc}`, wantWeight);
-  await fsp.rename(`${VOICE_MODELS_DIR}/${indexSrc}`, wantIndex);
+  // if_save_every_weights="Yes" (train arg [15]) drops a small model to
+  // weights/ every save_every_epoch as <voiceId>_e{N}_s{S}.pth. Only the
+  // final model (renamed above) is the voice — sweep the periodic ones so
+  // each run doesn't leak ~55MB × (epochs/5) into voice-models/.
+  const stray = (await fsp.readdir(VOICE_MODELS_DIR)).filter(
+    (f) => f.startsWith(`${voiceId}_e`) && f.endsWith(".pth"),
+  );
+  await Promise.all(stray.map((f) => fsp.rm(`${VOICE_MODELS_DIR}/${f}`, { force: true })));
+  if (stray.length) console.log(`[rvc] swept ${stray.length} periodic checkpoint(s) for ${voiceId}`);
+
+  // The index file may land slightly after the .pth (separate train_index
+  // step). Poll for up to 2 minutes after the .pth appears.
+  const logsDir = `${VOICE_TRAIN_LOGS_DIR}/${voiceId}`;
+  const idxDeadline = Date.now() + 120_000;
+  let indexSrc: string | null = null;
+  while (Date.now() < idxDeadline) {
+    try {
+      const entries = await fsp.readdir(logsDir);
+      indexSrc = entries.find((f) => f.endsWith(".index") && f.startsWith("added_")) ?? null;
+      if (indexSrc) break;
+    } catch { /* logsDir not present yet */ }
+    await new Promise((r) => setTimeout(r, 5_000));
+  }
+  if (!indexSrc) {
+    throw new Error(`.pth created but no added_*.index in logs/${voiceId}/ after 2min`);
+  }
+  await fsp.rename(`${logsDir}/${indexSrc}`, wantIndex);
+
+  await fsp.rm(logsDir, { recursive: true, force: true }).catch((err) => {
+    console.error(`[rvc] failed to clean logs/${voiceId}:`, err instanceof Error ? err.message : err);
+  });
+
   return { weightPath: wantWeight, indexPath: wantIndex };
 }
 
@@ -200,16 +362,11 @@ async function resolveTrainedArtifacts(userId: string, voiceId: string): Promise
 // ---------------------------------------------------------------------------
 
 export interface InferOptions {
-  weightPath: string;  // host path
-  indexPath: string;   // host path
+  weightPath: string;
+  indexPath: string;
 }
 
-// Runs the trained voice over the canned backing track and returns the
-// output as a host-side path. Caller hands it to processAudio for the
-// public watermarked URL.
 export async function inferOnBackingTrack(opts: InferOptions): Promise<string> {
-  // Ensure the backing track exists — without this, Gradio returns a
-  // confusing "file not found" deep in the RVC pipeline.
   try {
     await fsp.access(DEMO_BACKING_FILE);
   } catch {
@@ -218,79 +375,74 @@ export async function inferOnBackingTrack(opts: InferOptions): Promise<string> {
     );
   }
 
-  // get_vc takes just the weight filename (it resolves under /weights);
-  // vc_single takes the full container path for the FAISS index. Both
-  // because voice-models/ is bind-mounted to /weights.
-  const indexContainer = hostIndexToContainer(opts.indexPath);
+  // get_vc takes the .pth filename relative to /app/assets/weights —
+  // RVC scans the weights dir recursively, so nested user/voice paths work.
+  const weightRel = pathRelative(VOICE_MODELS_DIR, opts.weightPath).split(pathSep).join("/");
+  const indexContainer = pposix.join(
+    MOUNT_WEIGHTS,
+    pathRelative(VOICE_MODELS_DIR, opts.indexPath).split(pathSep).join("/"),
+  );
 
-  // === ASSUMPTION: vc_single parameter list (RVC-Project main ~2024) ===
-  // Some versions split file_index/file_index2 differently; this list
-  // matches the most common modern signature.
-  const inferArgs = [
-    0,                          // 0  sid (speaker id)
-    BACKING_CONTAINER_PATH,     // 1  input_audio_path
-    0,                          // 2  f0_up_key (semitone shift, 0 = no shift)
-    "",                         // 3  f0_file (optional pitch curve override)
-    "rmvpe",                    // 4  f0_method
-    indexContainer,             // 5  file_index (FAISS index path)
-    "",                         // 6  file_index2 (legacy slot, leave blank)
-    0.75,                       // 7  index_rate (how much to use the index — higher = closer to training voice)
-    3,                          // 8  filter_radius
-    0,                          // 9  resample_sr (0 = no resample)
-    0.25,                       // 10 rms_mix_rate (mix in original loudness contour)
-    0.33,                       // 11 protect (preserve unvoiced consonants — lower = more)
+  // Step 1: load the trained voice into RVC's active slot.
+  console.log(`[rvc] infer_change_voice load: ${weightRel}`);
+  await gradioWsCall({
+    fnIndex: FN_INFER_LOAD,
+    data: [weightRel, 0.33, 0.33],
+    timeoutMs: INFER_LOAD_TIMEOUT_MS,
+  });
+
+  // Step 2: run inference. 12 args matching the infer_convert signature
+  // captured from /info — [5] is the explicit index path, [6] the
+  // dropdown auto-detect (left blank since we pass [5] explicitly).
+  const inferData = [
+    0,                       // 0  speaker ID
+    BACKING_CONTAINER_PATH,  // 1  input audio path (inside container)
+    0,                       // 2  transpose (semitones)
+    null,                    // 3  optional F0 curve file
+    "rmvpe",                 // 4  pitch algorithm
+    indexContainer,          // 5  feature index path
+    "",                      // 6  dropdown auto-detect (unused)
+    0.75,                    // 7  index rate
+    3,                       // 8  filter radius
+    0,                       // 9  resample SR
+    0.25,                    // 10 RMS mix rate
+    0.33,                    // 11 protect voiceless consonants
   ];
+  console.log(`[rvc] infer_convert begin`);
+  const result = await gradioWsCall({
+    fnIndex: FN_INFER,
+    data: inferData,
+    timeoutMs: INFER_TIMEOUT_MS,
+  });
 
-  // RVC's vc_single requires the model to be loaded first. The Gradio UI
-  // does this via a separate get_vc(weight_file) call. Mirror that.
-  await callGradio("get_vc", [basename(opts.weightPath), 0, 0], SUBMIT_TIMEOUT_MS * 2);
-
-  const result = await callGradio(FN_INFER, inferArgs, INFER_TIMEOUT_MS);
-
-  // vc_single returns a tuple — the audio output is typically at index 1
-  // as a Gradio FileData { path: "..." }. Adjust if your version shapes
-  // the response differently.
-  const arr = result as unknown[];
-  const audioField = arr[1] as { path?: string; name?: string } | string | null;
-  let containerOutputPath: string | null = null;
-  if (typeof audioField === "string") containerOutputPath = audioField;
-  else if (audioField && typeof audioField === "object" && audioField.path) containerOutputPath = audioField.path;
-  if (!containerOutputPath) {
-    throw new Error(`vc_single returned unexpected shape — got ${JSON.stringify(result).slice(0, 200)}`);
+  // infer_convert returns [status_string, audio_file]. Newer Gradio
+  // wraps file outputs as {name, data, is_file: true, ...}; older
+  // returns {path: "..."}. Handle both.
+  const audioField = result[1] as { path?: string; name?: string } | string | null;
+  let containerPath: string | null = null;
+  if (typeof audioField === "string") containerPath = audioField;
+  else if (audioField && typeof audioField === "object") {
+    containerPath = audioField.path ?? audioField.name ?? null;
+  }
+  if (!containerPath) {
+    throw new Error(`infer_convert returned unexpected shape — ${JSON.stringify(result).slice(0, 200)}`);
   }
 
-  // Pull the file off the container into our host-side temp area. We
-  // re-use the audio-cache directory pipeline via processAudio in the
-  // caller; here we just copy out and return the path.
-  return copyOutOfContainer(containerOutputPath);
-}
-
-function hostWeightToContainer(hostPath: string): string {
-  const rel = pathRelative(VOICE_MODELS_DIR, hostPath);
-  if (rel.startsWith("..")) throw new Error(`weight path not under models dir: ${hostPath}`);
-  return pposix.join(MOUNT_WEIGHTS, rel.split(pathSep).join("/"));
-}
-
-function hostIndexToContainer(hostPath: string): string {
-  return hostWeightToContainer(hostPath);  // same root mount
+  return copyOutOfContainer(containerPath);
 }
 
 async function copyOutOfContainer(containerPath: string): Promise<string> {
   const stem = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const ext = containerPath.endsWith(".wav") ? ".wav" : ".mp3";
   const hostTmp = `${VOICE_MODELS_DIR}/_tmp-${stem}${ext}`;
-  // The container name `rvc` matches docker-compose.yml. If you ran the
-  // container with a different --name, change here.
-  await execFileAsync("docker", ["cp", `rvc:${containerPath}`, hostTmp]);
+  await execFileAsync("docker", ["cp", `${RVC_CONTAINER}:${containerPath}`, hostTmp]);
   return hostTmp;
 }
 
-// Used by callers to surface a cleaner failure when the user hasn't
-// brought up the RVC container.
 export async function pingRvc(): Promise<boolean> {
   try {
-    const res = await fetch(`${RVC_URL}/`, { signal: AbortSignal.timeout(2000) });
-    return res.ok || res.status === 404; // 404 = up but no root route; still alive
+    const { stdout } = await execFileAsync("docker", ["inspect", "-f", "{{.State.Running}}", RVC_CONTAINER]);
+    return stdout.trim() === "true";
   } catch {
     return false;
   }
