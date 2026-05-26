@@ -2197,7 +2197,7 @@ input, textarea {
 
 .voice-dropzone {
   display: block;
-  cursor: pointer;
+  outline: none;
 }
 .voice-dropzone-inner {
   border: 2px dashed rgba(0, 0, 0, 0.15);
@@ -2205,10 +2205,30 @@ input, textarea {
   padding: 24px;
   text-align: center;
   background: white;
-  transition: border-color 120ms;
+  transition: border-color 120ms, background 120ms;
 }
-.voice-dropzone:hover .voice-dropzone-inner {
+.voice-dropzone-active .voice-dropzone-inner {
   border-color: var(--mou-accent);
+  background: rgba(57, 28, 87, 0.05);
+}
+.voice-dropzone-pick-btn {
+  margin-top: 12px;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--mou-accent);
+  border-radius: 6px;
+  background: white;
+  color: var(--mou-accent);
+  cursor: pointer;
+  transition: background 120ms;
+}
+.voice-dropzone-pick-btn:hover {
+  background: rgba(57, 28, 87, 0.06);
+}
+.voice-dropzone-pick-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .voice-dropzone-emoji {
   font-size: 32px;

@@ -3,7 +3,7 @@
 // click 들어보기 to hear the trained voice singing the canned backing
 // track. The 들어보기 result plays inline from an audio element scoped to
 // the active row.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
   deleteVoice,
   fetchVoices,
@@ -238,15 +238,50 @@ function UploadCard({ tier, onSuccess, onError }: UploadCardProps) {
   const [displayName, setDisplayName] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const totalMb = files.reduce((s, f) => s + f.size, 0) / 1024 / 1024;
 
   function pickFiles(fileList: FileList | null) {
     if (!fileList) return;
-    const list = Array.from(fileList)
-      .filter((f) => /\.(mp3|wav)$/i.test(f.name))
-      .slice(0, 5);
-    setFiles(list);
+    const all = Array.from(fileList);
+    const accepted = all.filter((f) => /\.(mp3|wav)$/i.test(f.name)).slice(0, 5);
+    if (accepted.length === 0 && all.length > 0) {
+      onError("mp3 또는 wav 파일만 첨부할 수 있어요.");
+      return;
+    }
+    setFiles(accepted);
+  }
+
+  // Replace <label> with explicit click handler — some browsers + extension
+  // setups (and disabled inputs) suppress the implicit label→input click
+  // bridge, leading to "the dropzone does nothing." Triggering .click() on
+  // the ref is the more reliable path and is also the natural anchor for
+  // drag-drop handlers.
+  function handleZoneClick() {
+    if (submitting) return;
+    inputRef.current?.click();
+  }
+
+  function handleDragOver(e: DragEvent<HTMLDivElement>) {
+    if (submitting) return;
+    e.preventDefault();
+    if (!dragging) setDragging(true);
+  }
+
+  function handleDragLeave(e: DragEvent<HTMLDivElement>) {
+    // dragleave fires on entering child elements too — only clear when the
+    // pointer actually leaves the dropzone rectangle.
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setDragging(false);
+  }
+
+  function handleDrop(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setDragging(false);
+    if (submitting) return;
+    pickFiles(e.dataTransfer.files);
   }
 
   async function handleSubmit() {
@@ -285,8 +320,18 @@ function UploadCard({ tier, onSuccess, onError }: UploadCardProps) {
         disabled={submitting}
         maxLength={64}
       />
-      <label className="voice-dropzone">
+      {/* dropzone: drag-drop ONLY. No click handler on the div itself —
+          a previous version intercepted clicks meant for the upload button
+          below because the div's hit-area extended past the visible dashed
+          box. File selection is now a dedicated button rendered inside. */}
+      <div
+        className={`voice-dropzone ${dragging ? "voice-dropzone-active" : ""}`}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
         <input
+          ref={inputRef}
           type="file"
           accept=".mp3,.wav,audio/mpeg,audio/wav"
           multiple
@@ -298,10 +343,18 @@ function UploadCard({ tier, onSuccess, onError }: UploadCardProps) {
           {files.length === 0 ? (
             <>
               <div className="voice-dropzone-emoji">🎙️</div>
-              <div className="voice-dropzone-main">mp3 또는 wav 파일 2-5개 선택</div>
+              <div className="voice-dropzone-main">mp3/wav 파일 2-5개</div>
               <div className="voice-dropzone-hint">
-                총 30-180초의 깨끗한 보컬 (반주·노이즈 없을수록 좋음)
+                여기로 드래그하거나 아래 버튼 클릭. 총 30-180초 깨끗한 보컬.
               </div>
+              <button
+                type="button"
+                className="voice-dropzone-pick-btn"
+                onClick={handleZoneClick}
+                disabled={submitting}
+              >
+                파일 선택
+              </button>
             </>
           ) : (
             <>
@@ -314,10 +367,18 @@ function UploadCard({ tier, onSuccess, onError }: UploadCardProps) {
                   <li key={`${f.name}-${i}`}>{f.name}</li>
                 ))}
               </ul>
+              <button
+                type="button"
+                className="voice-dropzone-pick-btn"
+                onClick={handleZoneClick}
+                disabled={submitting}
+              >
+                다시 선택
+              </button>
             </>
           )}
         </div>
-      </label>
+      </div>
       <div className="voice-upload-actions">
         <button
           className="btn-primary"
