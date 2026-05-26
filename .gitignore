@@ -35,3 +35,6 @@ server/voice-train-logs/
 server/voice-demo-backing/*.wav
 server/voice-demo-backing/*.mp3
 voice/
+
+# Local RVC dev/debug scaffolds (enqueue jobs, probe DB, direct smoke tests)
+server/test-*.ts
