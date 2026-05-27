@@ -13,6 +13,13 @@ services:
     # Then `docker compose up rvc` here.
     image: rvc-webui:latest
     container_name: rvc
+    # Docker's default /dev/shm is 64MB. RVC training's PyTorch DataLoader
+    # (num_workers>0) passes tensors between workers via shared memory; with
+    # a real training set (e.g. 53s / 16 segments) 64MB is exhausted within a
+    # few epochs → "DataLoader worker killed by signal: Bus error" → train_nsf
+    # dies, and train1key swallows it and reports success with no model saved.
+    # 2GB is ample headroom for the batch/segment sizes we train at.
+    shm_size: "2gb"
     ports:
       - "7865:7865"  # Gradio default. ACE-Step uses 7860 — no conflict.
     deploy:

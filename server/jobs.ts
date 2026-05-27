@@ -124,7 +124,11 @@ export const PER_USER_INFLIGHT_CAP = 2;
 // row, post-boot recovery missed it) both eventually fill the global cap and
 // 503 honest traffic. Sweep flips them to failed.
 const QUEUED_TTL_MS = 60 * 60_000;     // 1h — generous for a popular slot
-const RUNNING_TTL_MS = 15 * 60_000;    // 15min — Pro 3min + watermark + slack
+const RUNNING_TTL_MS = 15 * 60_000;    // 15min — ACE-Step gen/repaint/lego + rvc_infer (Pro 3min + watermark + slack)
+// rvc_train runs ~15-25min (ADR 0005); rvc.ts caps the docker-exec runner
+// at 60min, so the sweep is a backstop just past that — NOT the 15min above,
+// which would false-fail every legitimate training job.
+const RVC_TRAIN_RUNNING_TTL_MS = 65 * 60_000;
 const SWEEP_INTERVAL_MS = 60_000;      // run once per minute
 
 function audioUrl(filename: string): string {
@@ -294,31 +298,44 @@ export async function recoverStaleRunning(): Promise<number> {
 
 // Periodic sweep that complements recoverStaleRunning. Catches:
 //   - queued rows older than QUEUED_TTL_MS (client abandoned the poll)
-//   - running rows older than RUNNING_TTL_MS (worker hung past the ACE-Step
-//     timeout; safety net behind acestep.ts's per-fetch AbortSignal)
-// Both classes get flipped to 'failed' so the global queue cap doesn't
-// silently fill up with dead rows.
+//   - running rows older than their kind's TTL (worker hung past the
+//     workload's own timeout; safety net behind the per-job AbortSignal /
+//     docker-exec runner timeout)
+// All get flipped to 'failed' so the global queue cap doesn't silently
+// fill up with dead rows. rvc_train uses a much longer TTL because a real
+// training run is ~15-25min — the 15min default would false-fail it.
 async function sweepStaleJobs(): Promise<number> {
   const sb = getSupabase();
   const now = Date.now();
   const queuedCutoff = new Date(now - QUEUED_TTL_MS).toISOString();
   const runningCutoff = new Date(now - RUNNING_TTL_MS).toISOString();
+  const trainCutoff = new Date(now - RVC_TRAIN_RUNNING_TTL_MS).toISOString();
   const finishedAt = new Date(now).toISOString();
-  const [queuedRes, runningRes] = await Promise.all([
+  const [queuedRes, runningRes, trainRes] = await Promise.all([
     sb.from("jobs")
       .update({ status: "failed", error: "timed out while queued", finished_at: finishedAt })
       .eq("status", "queued")
       .lt("created_at", queuedCutoff)
       .select("id"),
+    // Short-running kinds: everything except rvc_train.
     sb.from("jobs")
       .update({ status: "failed", error: "timed out while running", finished_at: finishedAt })
       .eq("status", "running")
+      .neq("kind", "rvc_train")
       .lt("started_at", runningCutoff)
+      .select("id"),
+    // rvc_train: long backstop just past rvc.ts's 60min runner cap.
+    sb.from("jobs")
+      .update({ status: "failed", error: "timed out while running", finished_at: finishedAt })
+      .eq("status", "running")
+      .eq("kind", "rvc_train")
+      .lt("started_at", trainCutoff)
       .select("id"),
   ]);
   if (queuedRes.error) throw queuedRes.error;
   if (runningRes.error) throw runningRes.error;
-  return (queuedRes.data?.length ?? 0) + (runningRes.data?.length ?? 0);
+  if (trainRes.error) throw trainRes.error;
+  return (queuedRes.data?.length ?? 0) + (runningRes.data?.length ?? 0) + (trainRes.data?.length ?? 0);
 }
 
 // Worker loop internals. Single-instance, single-loop — no JS-level mutex
