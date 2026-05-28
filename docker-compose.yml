@@ -52,4 +52,10 @@ services:
       # Mounted directly into Python's site-packages so it auto-loads
       # for the main Gradio server AND every spawned training subprocess.
       - ./server/rvc-runner/sitecustomize.py:/usr/lib/python3.9/sitecustomize.py:ro
+      # Korean-language pretrained weights (KLM by SeoulStreamingStation).
+      # The bundled assets/pretrained_v2/f0G40k.pth was trained on English /
+      # Chinese vocals — fine-tuning Korean targets on top of it produces
+      # robotic output. KLM is RVC v2 40k trained on Korean voice actors +
+      # vocalists; rvc.ts passes these paths as pretrainG/pretrainD.
+      - ./server/voice-pretrained:/app/assets/pretrained_klm:ro
     restart: unless-stopped

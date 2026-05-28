@@ -83,8 +83,17 @@ export async function trainVoice(opts: TrainOptions): Promise<TrainResult> {
     opts.epochs,         // 8  total_epoch
     7,                   // 9  batch size per GPU (fits 12GB VRAM)
     "Yes",               // 10 save only latest .ckpt
-    "",                  // 11 pretrained G (default bundled)
-    "",                  // 12 pretrained D (default bundled)
+    // [11],[12]: KLM (Korean Language Model) pretrained — RVC v2 40k base
+    // finetuned on Korean voice actors + vocalists. The bundled English /
+    // Chinese-trained assets/pretrained_v2/f0G40k.pth produces robotic output
+    // when fine-tuned for Korean (model has to learn KR phonemes from
+    // scratch). KLM43_X3 is the most recent 40k pair from
+    // SeoulStreamingStation via Politrees/RVC_resources, mounted by
+    // docker-compose at /app/assets/pretrained_klm. NB train1key does NOT
+    // fall back to bundled weights on empty string — it just logs "No
+    // pretrained" and trains from random init.
+    "assets/pretrained_klm/G_KLM43_X3_40k.pth",  // 11 pretrained G
+    "assets/pretrained_klm/D_KLM43_X3_40k.pth",  // 12 pretrained D
     "0",                 // 13 GPU index
     "No",                // 14 cache training set to GPU memory
     "Yes",               // 15 save small final model to weights/

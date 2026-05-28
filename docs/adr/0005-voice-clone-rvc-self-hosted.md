@@ -29,3 +29,14 @@ On 12GB, **all four workloads must serialize.** Treating this as a hard constrai
 - Voice samples (multi-file mp3/wav, typically 2-3 per user matching musicai's intake) need an upload path. ADR 0003's single-file endpoint extends to multi-file with a different retention policy: source samples auto-delete when their parent `user_voices` row reaches `status='trained'` (the `.pth` weight is the persistent artifact, not the raw audio). Implementation in Phase 1.
 - **Escape hatch**: if observed queue-block time per week exceeds (threshold TBD in Phase 1) or if a single user's training visibly degrades Pro-tier generation latency, training moves to Replicate (option d) with zero user-visible UI change. The `rvc_train` job kind is the abstraction point.
 - License posture: RVC base weights are MIT, but the model was trained on data of unclear provenance — same gray-area risk as Suno itself. We accept this for V1 and surface it via a checkbox at voice-upload time ("내 목소리이며 학습·생성에 사용 권한이 있음을 확인합니다") that follows ElevenLabs' consent-verification spirit. We do *not* offer celebrity-voice training as a product surface.
+
+## Korean pretrained base (KLM)
+
+RVC ships with `assets/pretrained_v2/f0G40k.pth` / `f0D40k.pth` pretrained on English + Chinese vocals. Fine-tuning a Korean target on top of that base produces a robotic clone — the bundled base model has no Korean phonemes, so 250 epochs on tiny user data never recovers natural Korean prosody. Confirmed by ear-test against the same model retrained on a Korean base.
+
+We use **KLM (Korean Language Model)** — RVC v2 40k pretrained by SeoulStreamingStation on Korean voice actors + vocalists, with phonetic coverage tuned for Korean (bilabial/alveolar/velar/uvular/glottal). Fine-tuning starts with the model already understanding Korean phonemes and converges to a natural-sounding clone.
+
+- Variant: `KLM43_X3` (most recent 40k pair as of 2026-05). Older variants (`KLM40`, `KLM42_T4`, fp32 series) live in the same HF dir for comparison.
+- Source: [Politrees/RVC_resources](https://huggingface.co/Politrees/RVC_resources/tree/main/pretrained/v2/40k/KLM).
+- Files (1.3 GB total) are gitignored; download per `server/voice-pretrained/README.md`. `docker-compose.yml` bind-mounts them at `/app/assets/pretrained_klm/`, and `server/rvc.ts` passes the paths as `pretrainG`/`pretrainD` to `train1key` (positions [11]/[12]).
+- Watch-out: `train1key` does **not** fall back to the bundled weights when these args are empty — it logs `No pretrained Generator` and trains from random init, which 50-250 ep on tiny data never recovers from (output is pure noise). The path strings are required.
