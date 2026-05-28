@@ -41,3 +41,6 @@ server/test-*.ts
 
 # KLM Korean RVC pretrained weights (1.3GB) — download per server/voice-pretrained/README.md
 server/voice-pretrained/*.pth
+
+# RVC training writes mel-spec cache here at runtime — not source
+server/voice-rvc-mute/**/*.spec.pt

@@ -43,6 +43,13 @@ services:
       - ./server/voice-models:/app/assets/weights
       - ./server/voice-train-logs:/app/logs
       - ./server/voice-demo-backing:/app/backing:ro
+      # RVC needs silent-padding files at /app/logs/mute/ for short
+      # training data (referenced from filelist). The voice-train-logs
+      # bind above shadows the image's bundled copy; a sibling cleanup
+      # of voice-train-logs/* wipes mute too and training silently dies
+      # with FileNotFoundError that train1key swallows. Nested-bind the
+      # mute dir from a dedicated host path so it survives such cleanups.
+      - ./server/voice-rvc-mute:/app/logs/mute
       # Python wrapper that runs train1key via `docker exec`. RVC's
       # Gradio 3.34 generator-based training can't be driven via raw HTTP
       # (queue=None + first-yield-only behavior), so server/rvc.ts spawns
