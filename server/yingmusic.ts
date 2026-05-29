@@ -17,10 +17,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONTAINER = "yingmusic";
 const RUNNER = "yingmusic-infer";
 
-// Mousike voice/ dir is bind-mounted into the container at /data (see
-// docker-compose.yml). Anything we pass as source/target must live under it.
-const VOICE_HOST_ROOT = resolve(__dirname, "..", "voice");
-const VOICE_CONTAINER_MOUNT = "/data";
+// Two host roots are bind-mounted into the yingmusic container — anything
+// we pass as source/target must live under one of them. Order matters:
+// most-specific first so a path under voice-samples/ doesn't accidentally
+// match a parent prefix. Mirrors docker-compose.yml `yingmusic.volumes`.
+const VOICE_MOUNTS: Array<{ host: string; container: string }> = [
+  { host: resolve(__dirname, "voice-samples"), container: "/data/_uploads" },
+  { host: resolve(__dirname, "..", "voice"),  container: "/data" },
+];
 
 // YingMusic-SVC source dir on host (mounted at /app in container). The
 // inference script writes to <src>/outputs/<expname>/, which we read back.
@@ -47,16 +51,20 @@ export interface CloneOptions {
   steps?: number;
 }
 
-// Translate a /…/Mousike/voice/x/y.wav host path to /data/x/y.wav container
-// path. Posix paths only on the container side, even on Windows hosts.
+// Translate a host path to its container-side equivalent under one of the
+// bind-mounted roots in VOICE_MOUNTS. Posix paths only on the container
+// side, even on Windows hosts.
 function toContainerPath(hostPath: string): string {
   const abs = resolve(hostPath);
-  const prefix = VOICE_HOST_ROOT + pathSep;
-  if (!abs.startsWith(prefix)) {
-    throw new Error(`yingmusic: path must be under ${VOICE_HOST_ROOT}, got ${abs}`);
+  for (const mount of VOICE_MOUNTS) {
+    const prefix = mount.host + pathSep;
+    if (abs.startsWith(prefix)) {
+      const rel = abs.slice(prefix.length).split(pathSep).join("/");
+      return pposix.join(mount.container, rel);
+    }
   }
-  const rel = abs.slice(prefix.length).split(pathSep).join("/");
-  return pposix.join(VOICE_CONTAINER_MOUNT, rel);
+  const roots = VOICE_MOUNTS.map((m) => m.host).join(" or ");
+  throw new Error(`yingmusic: path must be under ${roots}, got ${abs}`);
 }
 
 // Run inference and return the host path of the produced wav.

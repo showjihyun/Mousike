@@ -88,8 +88,14 @@ services:
       # `git clone https://github.com/GiantAILab/YingMusic-SVC` to YINGMUSIC_SRC,
       # download YingMusic-SVC-full.pt into <src>/ckpt/ — see server/yingmusic/README.md.
       - ${YINGMUSIC_SRC:-../YingMusic-SVC}:/app
-      # Mousike-side audio inputs (user voice refs, ACE-Step outputs).
+      # Mousike-side audio inputs. Two roots since uploads and ACE-Step
+      # samples live in different host trees:
+      #   /data       → ./voice (curated test refs in voice/sample/)
+      #   /data/_uploads → ./server/voice-samples (per-user reference clips
+      #                    minted by POST /api/voice-samples)
+      # yingmusic.ts:toContainerPath translates host paths under either root.
       - ./voice:/data:ro
+      - ./server/voice-samples:/data/_uploads:ro
       # Persistent HF / Torch hub cache so BigVGAN + Whisper survive container
       # recreates (otherwise re-downloaded on every cold start).
       - ./server/yingmusic-cache:/cache

@@ -17,11 +17,12 @@ import { prepareSourceForAceStep, processAudio, processAudioFromHost } from "./a
 import { applyGenreTag, genreByCategory, resolveGenre, withQualitySuffix, type GenreCategory } from "./genre.js";
 import { logUsage, type UsageAction } from "./quota.js";
 import { inferOnBackingTrack, trainVoice } from "./rvc.js";
+import { cloneOnto, pingYingMusic } from "./yingmusic.js";
 import { purgeVoiceSamples, resolveVoiceSamplePath } from "./voice-storage.js";
 
 const PORT = 8787;
 
-export type JobKind = "generate" | "repaint" | "lego" | "rvc_train" | "rvc_infer";
+export type JobKind = "generate" | "repaint" | "lego" | "rvc_train" | "rvc_infer" | "yingmusic_clone";
 export type JobStatus = "queued" | "running" | "done" | "failed";
 
 // User's literal choice on /api/generate. "auto" is resolved server-side via
@@ -81,12 +82,23 @@ export interface RvcInferPayload {
   voiceId: string;
 }
 
+// Phase 2 zero-shot SVC (ADR 0006). Worker reads sample_paths[0] off
+// user_voices for the target reference; sourceHostPath is the vocal stem
+// to convert (produced by the ACE-Step + BR-separator chain). Both paths
+// must live under directories bind-mounted into the yingmusic container —
+// see yingmusic.ts:toContainerPath for the allowed roots.
+export interface YingmusicClonePayload {
+  voiceId: string;
+  sourceHostPath: string;
+}
+
 export type JobPayload =
   | GeneratePayload
   | RepaintPayload
   | LegoPayload
   | RvcTrainPayload
-  | RvcInferPayload;
+  | RvcInferPayload
+  | YingmusicClonePayload;
 
 export interface JobSong {
   id: string;
@@ -173,6 +185,13 @@ export async function enqueue(
   kind: JobKind,
   payload: JobPayload,
 ): Promise<string> {
+  // Fail-fast for yingmusic_clone: if the worker container is down, refuse
+  // the enqueue rather than letting the row sit until the sweep TTL fires.
+  // Route handlers should pre-check pingYingMusic() to 503 cleanly; this is
+  // the backstop for any other caller.
+  if (kind === "yingmusic_clone" && !(await pingYingMusic())) {
+    throw new Error("yingmusic worker unavailable");
+  }
   const id = mintJobId();
   const priority = tierToPriority(await lookupUserTier(userId));
   const sb = getSupabase();
@@ -630,6 +649,51 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       id: `voice-demo-${Date.now()}-${i}`,
       audioUrl: audioUrl(filename),
       prompt: `${row.display_name} 들어보기`,
+      vocalLanguage: "unknown",
+    }));
+    return { songs };
+  }
+
+  if (job.kind === "yingmusic_clone") {
+    const p = job.payload as YingmusicClonePayload;
+    if (!job.user_id) throw new Error("yingmusic_clone requires an authenticated user");
+    const sb = getSupabase();
+    const { data: voiceRow, error: vErr } = await sb
+      .from("user_voices")
+      .select("id, display_name, status, sample_paths")
+      .eq("id", p.voiceId)
+      .eq("user_id", job.user_id)
+      .maybeSingle();
+    if (vErr) throw vErr;
+    if (!voiceRow) throw new Error(`voice ${p.voiceId} not found`);
+    const row = voiceRow as {
+      id: string;
+      display_name: string;
+      status: string;
+      sample_paths: string[];
+    };
+    if (row.status !== "ready") {
+      throw new Error(`voice ${row.id} is not ready (status=${row.status})`);
+    }
+    if (row.sample_paths.length === 0) {
+      throw new Error(`voice ${row.id} has no reference sample`);
+    }
+    // YingMusic is zero-shot: the first uploaded clip is the reference.
+    // Phase-2 upload UI uploads exactly one clip per voice (commit 2/4).
+    const targetHostPath = resolveVoiceSamplePath(row.sample_paths[0]);
+
+    console.log(`[job ${job.id}] yingmusic_clone ${row.id} (${row.display_name})`);
+    const outputHostPath = await cloneOnto({
+      sourceHostPath: p.sourceHostPath,
+      targetHostPath,
+      expname: job.id,
+    });
+
+    const filenames = await processAudioFromHost([outputHostPath]);
+    const songs: JobSong[] = filenames.map((filename, i) => ({
+      id: `voice-clone-${Date.now()}-${i}`,
+      audioUrl: audioUrl(filename),
+      prompt: `${row.display_name} 보컬`,
       vocalLanguage: "unknown",
     }));
     return { songs };
