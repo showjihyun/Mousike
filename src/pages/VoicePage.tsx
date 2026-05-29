@@ -345,7 +345,8 @@ function UploadCard({ tier, onSuccess, onError }: UploadCardProps) {
               <div className="voice-dropzone-emoji">🎙️</div>
               <div className="voice-dropzone-main">mp3/wav 파일 2-5개</div>
               <div className="voice-dropzone-hint">
-                여기로 드래그하거나 아래 버튼 클릭. 총 30-180초 깨끗한 보컬.
+                여기로 드래그하거나 아래 버튼 클릭. <strong>한 사람 목소리만</strong>,
+                총 30-180초 깨끗한 보컬. 여러 사람을 섞으면 출력이 깨져요.
               </div>
               <button
                 type="button"
