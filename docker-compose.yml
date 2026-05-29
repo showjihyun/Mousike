@@ -66,3 +66,32 @@ services:
       # vocalists; rvc.ts passes these paths as pretrainG/pretrainD.
       - ./server/voice-pretrained:/app/assets/pretrained_klm:ro
     restart: unless-stopped
+
+  # Phase 2 (ADR 0006): zero-shot SVC via YingMusic-SVC. Eventually replaces
+  # the per-voice rvc_train pipeline. Source repo lives outside Mousike — set
+  # YINGMUSIC_SRC in .env to override the default host path.
+  yingmusic:
+    build:
+      context: ./server/yingmusic
+      dockerfile: Dockerfile
+    image: mousike-yingmusic:latest
+    container_name: yingmusic
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      # YingMusic-SVC source + checkpoint (lives outside this repo — large).
+      # `git clone https://github.com/GiantAILab/YingMusic-SVC` to YINGMUSIC_SRC,
+      # download YingMusic-SVC-full.pt into <src>/ckpt/ — see server/yingmusic/README.md.
+      - ${YINGMUSIC_SRC:-../YingMusic-SVC}:/app
+      # Mousike-side audio inputs (user voice refs, ACE-Step outputs).
+      - ./voice:/data:ro
+      # Persistent HF / Torch hub cache so BigVGAN + Whisper survive container
+      # recreates (otherwise re-downloaded on every cold start).
+      - ./server/yingmusic-cache:/cache
+    restart: unless-stopped
+

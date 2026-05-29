@@ -44,3 +44,8 @@ server/voice-pretrained/*.pth
 
 # RVC training writes mel-spec cache here at runtime — not source
 server/voice-rvc-mute/**/*.spec.pt
+
+# YingMusic-SVC integration (Phase 2). Source repo + checkpoint live outside
+# this repo — see server/yingmusic/README.md. HF/torch cache survives container
+# recreates but is rebuilt on demand.
+server/yingmusic-cache/
