@@ -9,16 +9,22 @@
 //   - queuedDepth:           global queue depth (back-pressure / 503)
 //   - countUsedPlusInFlight: quota check that includes pending jobs so a user
 //                            can't pre-queue past their daily/monthly limit.
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { randomBytes } from "crypto";
+import { promises as fsp } from "fs";
+import { join } from "path";
 import { getSupabase } from "./db.js";
 import { translateKoreanToEnglish } from "./ollama.js";
 import { runAceStep } from "./acestep.js";
-import { prepareSourceForAceStep, processAudio, processAudioFromHost } from "./audio.js";
+import { AUDIO_SECURE_DIR, prepareSourceForAceStep, processAudio, processAudioFromHost } from "./audio.js";
 import { applyGenreTag, genreByCategory, resolveGenre, withQualitySuffix, type GenreCategory } from "./genre.js";
 import { logUsage, type UsageAction } from "./quota.js";
 import { inferOnBackingTrack, trainVoice } from "./rvc.js";
-import { cloneOnto, pingYingMusic } from "./yingmusic.js";
+import { cloneAndRemix, cloneOnto, pingYingMusic } from "./yingmusic.js";
 import { purgeVoiceSamples, resolveVoiceSamplePath } from "./voice-storage.js";
+
+const execFileAsync = promisify(execFile);
 
 const PORT = 8787;
 
@@ -443,6 +449,79 @@ async function markFailed(jobId: string, message: string): Promise<void> {
   if (error) console.error("[jobs] markFailed:", error.message);
 }
 
+// Look up the user's 'ready' YingMusic voice for the auto-chain step in
+// generate. Returns the first ready row (newest first via the index) or
+// null when there's nothing to apply. Errors degrade to null — the chain
+// is an enhancement, not a correctness requirement, and falling back to
+// plain ACE-Step output is the right failure mode.
+interface ReadyVoice {
+  id: string;
+  sample_paths: string[];
+}
+async function lookupReadyVoice(userId: string): Promise<ReadyVoice | null> {
+  try {
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from("user_voices")
+      .select("id, sample_paths")
+      .eq("user_id", userId)
+      .eq("status", "ready")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.error(`[jobs] lookupReadyVoice(${userId}):`, error.message);
+      return null;
+    }
+    if (!data) return null;
+    const row = data as ReadyVoice;
+    if (!row.sample_paths || row.sample_paths.length === 0) return null;
+    return row;
+  } catch (e) {
+    console.error(`[jobs] lookupReadyVoice(${userId}):`, e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+// Auto-chain: ACE-Step output → BR-separate → clone vocals onto user's
+// ready voice → echo+reverb remix with the instrumental. Replaces
+// processAudio's docker-cp + watermark path when the user has a ready
+// voice. Returns the same shape (watermarked filenames in audio-cache).
+//
+// Transient flow per ACE-Step output:
+//   1. docker cp ace-step:<containerPath> → audio-secure/_pending-<id>.mp3
+//      (audio-secure is bind-mounted into the yingmusic container as
+//       /data/_aceout, so the chain runner reads it via that root)
+//   2. cloneAndRemix → final wav in <YINGMUSIC_SRC>/outputs/<expname>/accompany/
+//   3. processAudioFromHost on the chain wav: copy to audio-secure/<stem>.mp3,
+//      watermark to audio-cache/<stem>-wm.mp3, unlink the chain wav
+//   4. unlink the _pending-*.mp3 transient
+async function chainAceOutputs(
+  containerPaths: string[],
+  voice: ReadyVoice,
+  jobId: string,
+): Promise<string[]> {
+  const targetHostPath = resolveVoiceSamplePath(voice.sample_paths[0]);
+  const filenames: string[] = [];
+  for (let i = 0; i < containerPaths.length; i++) {
+    const containerPath = containerPaths[i];
+    const transient = join(AUDIO_SECURE_DIR, `_pending-${jobId}-${i}.mp3`);
+    try {
+      await execFileAsync("docker", ["cp", `ace-step:${containerPath}`, transient]);
+      const chainOut = await cloneAndRemix({
+        sourceHostPath: transient,
+        targetHostPath,
+        expname: `${jobId}-${i}`,
+      });
+      const [filename] = await processAudioFromHost([chainOut]);
+      filenames.push(filename);
+    } finally {
+      await fsp.unlink(transient).catch(() => {});
+    }
+  }
+  return filenames;
+}
+
 // Vocal-language auto rule (see CONTEXT.md). Pure: caller supplies the inputs.
 // Note: returns "KO"|"EN" only — never "unknown". Use "unknown" only when
 // inheriting from a legacy parent song that predates this feature.
@@ -531,7 +610,19 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       ...(keyOverride !== undefined && { key: keyOverride }),
       ...(lyricsOverride !== undefined && { lyrics: lyricsOverride }),
     });
-    const filenames = await processAudio(paths);
+    // Auto-apply the user's voice via the BR-separate + YingMusic chain
+    // (ADR 0006). Anonymous callers and users without a 'ready' voice fall
+    // through to the plain ACE-Step path. Failure inside chainAceOutputs
+    // propagates as a job failure rather than silently falling back — the
+    // user explicitly asked for their voice and getting a default-vocal
+    // result instead would be confusing.
+    const readyVoice = job.user_id ? await lookupReadyVoice(job.user_id) : null;
+    if (readyVoice) {
+      console.log(`[job ${job.id}] generate chain via voice=${readyVoice.id}`);
+    }
+    const filenames = readyVoice
+      ? await chainAceOutputs(paths, readyVoice, job.id)
+      : await processAudio(paths);
     const songs: JobSong[] = filenames.map((filename, i) => ({
       id: `${Date.now()}-${i}`,
       audioUrl: audioUrl(filename),

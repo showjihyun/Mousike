@@ -12,10 +12,13 @@ WORKDIR /app
 COPY requirements.filtered.txt /tmp/req.txt
 RUN pip install --no-cache-dir -r /tmp/req.txt
 
-# Inference wrapper baked into the image — server/yingmusic.ts invokes it via
-# `docker exec yingmusic yingmusic-infer` with env vars (SOURCE/TARGET/EXPNAME).
+# Inference wrappers baked into the image — server/yingmusic.ts invokes
+# these via `docker exec yingmusic <name>` with env vars:
+#   yingmusic-infer  → direct clone (SOURCE/TARGET/EXPNAME[/STEPS])
+#   yingmusic-chain  → ACE-Step mix → BR-separate → clone+remix chain
 COPY infer.sh /usr/local/bin/yingmusic-infer
-RUN chmod +x /usr/local/bin/yingmusic-infer
+COPY chain.sh /usr/local/bin/yingmusic-chain
+RUN chmod +x /usr/local/bin/yingmusic-infer /usr/local/bin/yingmusic-chain
 
 ENV HF_HOME=/cache/hf TORCH_HOME=/cache/torch
 

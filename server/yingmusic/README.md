@@ -32,7 +32,9 @@ git clone --depth 1 https://github.com/GiantAILab/YingMusic-SVC.git
 The Mousike-side docker-compose mounts this path as `/app`. Override with
 `YINGMUSIC_SRC` in `.env` if you put it elsewhere.
 
-### 2. Download the checkpoint (~731 MB)
+### 2. Download the checkpoints
+
+**YingMusic-SVC main checkpoint (~731 MB)** — required for any voice conversion:
 
 ```powershell
 $dest = "C:\WorkSpace\YingMusic-SVC\ckpt"
@@ -42,6 +44,20 @@ curl.exe -L -o "$dest\YingMusic-SVC-full.pt" `
 ```
 
 Mounted at `/app/ckpt/YingMusic-SVC-full.pt` inside the container.
+
+**BR Separator (`bs_roformer`) checkpoint** — required for the
+ACE-Step → chain integration (`yingmusic-chain` runner). Without it the
+chain pipeline fails with `FileNotFoundError` from `accom_separation/inference.py`.
+
+```powershell
+$brDest = "C:\WorkSpace\YingMusic-SVC\accom_separation\ckpt\bs_roformer"
+New-Item -ItemType Directory -Force -Path $brDest | Out-Null
+curl.exe -L -o "$brDest\bs_roformer.ckpt" `
+  "https://huggingface.co/GiantAILab/YingMusic-SVC/resolve/main/accom_separation/bs_roformer.ckpt"
+```
+
+(If the upstream URL moves, see the upstream `accom_separation/README.MD`.)
+The `config_bd_roformer.yaml` ships in-repo; only the `.ckpt` is missing.
 
 ### 3. Build + start the service
 
@@ -73,19 +89,25 @@ difference between source and target.
 
 - `Dockerfile` — PyTorch 2.4 + CUDA 12.4 base with build tools for `webrtcvad`
 - `requirements.filtered.txt` — the upstream `requirements.txt` minus the broken
-  `--pre --index-url cu126` lines that conflict with the pinned `torch==2.4.0`
-- `infer.sh` — single-inference wrapper; env vars `SOURCE` / `TARGET` /
-  `EXPNAME` / `STEPS` override
+  `--pre --index-url cu126` lines, plus `matplotlib` / `omegaconf` for the
+  BR Separator's bs_roformer config loader
+- `infer.sh` → `yingmusic-infer` — direct-clone wrapper (one diffusion pass,
+  no separator, no remix); env vars `SOURCE` / `TARGET` / `EXPNAME` / `STEPS`
+- `chain.sh` → `yingmusic-chain` — full chain: BR-separate the SOURCE
+  (full-mix song) into vocals + instrumental, clone vocals onto TARGET,
+  echo+reverb-mix the converted vocal back with the instrumental. Same
+  env-var contract as infer.sh.
 
-## Roadmap from here
+## Generation chain (Phase 2 default)
 
-This branch (`pivot/phase-2-yingmusic`) is at the "PoC validated, integration
-pending" point. Next:
+When a user has uploaded a reference voice, `POST /api/generate` runs:
 
-1. `server/yingmusic.ts` Node client (mirrors `server/rvc.ts` pattern —
-   spawn `docker exec yingmusic …` with JSON args).
-2. `jobs.ts` new kind: `yingmusic_clone` (a single job, no training counterpart).
-3. UI: replace the "학습 시작 → ~25분 대기" flow with "이 곡을 내 목소리로"
-   button on Song cards.
-4. `accom_separation/` + `--accompany` wired for ACE-Step → SVC chain
-   ("AI가 만든 음악 음정에 맞게 내 목소리로 노래").
+1. ACE-Step produces a full-mix track from the prompt
+2. `server/jobs.ts:chainAceOutputs` `docker cp`s the result into
+   `audio-secure/_pending-<jobid>-<i>.mp3` (audio-secure is bind-mounted
+   into the yingmusic container as `/data/_aceout`)
+3. `yingmusic-chain` runs BR Separator → YingMusic clone with `--accompany`
+4. The remixed wav from `/app/outputs/<expname>/accompany/` is watermarked
+   and served as the user's song
+
+Users without a ready voice skip the chain and get the plain ACE-Step output.

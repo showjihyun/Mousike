@@ -16,14 +16,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const CONTAINER = "yingmusic";
 const RUNNER = "yingmusic-infer";
+const CHAIN_RUNNER = "yingmusic-chain";
 
-// Two host roots are bind-mounted into the yingmusic container — anything
+// Three host roots are bind-mounted into the yingmusic container — anything
 // we pass as source/target must live under one of them. Order matters:
 // most-specific first so a path under voice-samples/ doesn't accidentally
 // match a parent prefix. Mirrors docker-compose.yml `yingmusic.volumes`.
 const VOICE_MOUNTS: Array<{ host: string; container: string }> = [
   { host: resolve(__dirname, "voice-samples"), container: "/data/_uploads" },
-  { host: resolve(__dirname, "..", "voice"),  container: "/data" },
+  { host: resolve(__dirname, "audio-secure"),  container: "/data/_aceout" },
+  { host: resolve(__dirname, "..", "voice"),   container: "/data" },
 ];
 
 // YingMusic-SVC source dir on host (mounted at /app in container). The
@@ -35,6 +37,12 @@ const OUTPUTS_HOST_ROOT = join(YINGMUSIC_SRC, "outputs");
 // 10min cap leaves room for batch / very long inputs without obscuring a
 // runaway hang.
 const INFER_TIMEOUT_MS = 10 * 60_000;
+// chain.sh adds a BR Separator pass (30-90s) before YingMusic; for a Pro
+// 3min source the whole chain is ~5-7min wall. 20min cap keeps us under the
+// worker's RUNNING_TTL_MS (15min) margin… wait — we DO need to stay below
+// jobs.ts:RUNNING_TTL_MS or the sweep will false-fail us. Keep this at 14min
+// so the abort fires first with a clear message instead of a silent sweep flip.
+const CHAIN_TIMEOUT_MS = 14 * 60_000;
 
 export interface CloneOptions {
   // Path to the vocal we want to convert (e.g. an ACE-Step output stem).
@@ -79,7 +87,7 @@ export async function cloneOnto(opts: CloneOptions): Promise<string> {
   const steps = String(opts.steps ?? 100);
 
   console.log(`[yingmusic] cloneOnto ${opts.expname}: ${source} → target ${target}`);
-  await runYingMusic(source, target, opts.expname, steps);
+  await runRunner(RUNNER, INFER_TIMEOUT_MS, { SOURCE: source, TARGET: target, EXPNAME: opts.expname, STEPS: steps });
 
   // my_inference.py writes <target_stem>_<source_stem>_<auto_pitch>.wav. We
   // don't know the auto pitch up front, so glob the dir and take the .wav.
@@ -92,23 +100,47 @@ export async function cloneOnto(opts: CloneOptions): Promise<string> {
   return join(outDir, wav);
 }
 
-// docker exec with env vars (rather than CLI args) so the bash wrapper stays
-// idiomatic. SOURCE/TARGET/EXPNAME/STEPS map 1:1 onto infer.sh.
-function runYingMusic(source: string, target: string, expname: string, steps: string): Promise<void> {
+// Chain inference: full-mix source → BR-separate → clone vocals onto target →
+// echo+reverb mix back with the instrumental. Returns the host path of the
+// final remixed wav. Used by the generate pipeline when the user has a
+// 'ready' user_voices row (auto-apply, no explicit opt-in).
+//
+// Timing on a 4070 SUPER for a 3-min Pro song is ~5-7 min wall (BR ~30-90s,
+// YingMusic RTF ~1.46) — fits inside the worker's RUNNING_TTL_MS.
+export async function cloneAndRemix(opts: CloneOptions): Promise<string> {
+  await fsp.access(opts.sourceHostPath);
+  await fsp.access(opts.targetHostPath);
+
+  const source = toContainerPath(opts.sourceHostPath);
+  const target = toContainerPath(opts.targetHostPath);
+  const steps = String(opts.steps ?? 100);
+
+  console.log(`[yingmusic] cloneAndRemix ${opts.expname}: ${source} → target ${target}`);
+  await runRunner(CHAIN_RUNNER, CHAIN_TIMEOUT_MS, { SOURCE: source, TARGET: target, EXPNAME: opts.expname, STEPS: steps });
+
+  // chain.sh writes the final remix to /app/outputs/<expname>/accompany/<x>.wav.
+  // The vc filename is auto-derived inside my_inference.py from source/target
+  // stems + pitch shift, so glob the accompany/ dir.
+  const accDir = join(OUTPUTS_HOST_ROOT, opts.expname, "accompany");
+  const entries = await fsp.readdir(accDir).catch(() => [] as string[]);
+  const wav = entries.find((f) => f.toLowerCase().endsWith(".wav"));
+  if (!wav) {
+    throw new Error(`yingmusic: chain reported done but no .wav in ${accDir}`);
+  }
+  return join(accDir, wav);
+}
+
+// docker exec with env vars (rather than CLI args) so the bash wrappers
+// (infer.sh, chain.sh) stay idiomatic. env keys map 1:1 onto the wrapper's
+// "${SOURCE:?required}" guards.
+function runRunner(runner: string, timeoutMs: number, env: Record<string, string>): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const child = spawn(
-      "docker",
-      [
-        "exec",
-        "-e", `SOURCE=${source}`,
-        "-e", `TARGET=${target}`,
-        "-e", `EXPNAME=${expname}`,
-        "-e", `STEPS=${steps}`,
-        CONTAINER,
-        RUNNER,
-      ],
-      { windowsHide: true },
-    );
+    const args: string[] = ["exec"];
+    for (const [k, v] of Object.entries(env)) {
+      args.push("-e", `${k}=${v}`);
+    }
+    args.push(CONTAINER, runner);
+    const child = spawn("docker", args, { windowsHide: true });
 
     let stdoutBuf = "";
     let stderrTail = "";
@@ -123,8 +155,8 @@ function runYingMusic(source: string, target: string, expname: string, steps: st
     };
 
     const timer = setTimeout(() => {
-      settle(() => reject(new Error(`yingmusic timed out after ${Math.round(INFER_TIMEOUT_MS / 60000)}min`)));
-    }, INFER_TIMEOUT_MS);
+      settle(() => reject(new Error(`yingmusic ${runner} timed out after ${Math.round(timeoutMs / 60000)}min`)));
+    }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdoutBuf += chunk.toString();
@@ -148,7 +180,7 @@ function runYingMusic(source: string, target: string, expname: string, steps: st
 
     child.on("close", (code) => {
       if (code === 0) settle(() => resolve());
-      else settle(() => reject(new Error(`yingmusic exited code=${code}: ${stderrTail.slice(-400)}`)));
+      else settle(() => reject(new Error(`yingmusic ${runner} exited code=${code}: ${stderrTail.slice(-400)}`)));
     });
   });
 }
