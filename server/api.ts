@@ -7,10 +7,9 @@ import { join } from "path";
 import multer from "multer";
 import { getSupabase } from "./db.js";
 import { requireAuth, type AuthUser } from "./auth.js";
-import { readUsage, tierEpochsForTraining, tierVoiceCap } from "./quota.js";
+import { readUsage, tierVoiceCap } from "./quota.js";
 import { renderCert } from "./cert.js";
 import { AUDIO_CACHE_DIR, AUDIO_SECURE_DIR, fileExists } from "./audio.js";
-import { enqueue } from "./jobs.js";
 import {
   ensureVoiceSampleDir,
   probeDurationSec,
@@ -358,20 +357,19 @@ export function mountApi(app: Express): void {
     res.download(join(AUDIO_CACHE_DIR, filename), filename);
   });
 
-  // --- Voice-clone endpoints (Phase 1 of the musicai-stack pivot) -----------
-  // Upload writes raw samples to voice-samples/<uid>/<voiceId>/ on disk and
-  // inserts a user_voices row in 'uploading' state. The train trigger
-  // (POST /api/voices/:id/train) and the rvc_infer demo trigger live in
-  // commit C — they need rvc.ts wired into the worker dispatch first.
+  // --- Voice-clone endpoints (Phase 2 of the musicai-stack pivot, ADR 0006) -
+  // YingMusic-SVC is zero-shot: the upload itself produces a usable voice
+  // (status='ready'); there is no separate training step or demo trigger.
+  // The voice is consumed downstream by yingmusic_clone jobs in the
+  // ACE-Step + BR-separator generation chain.
 
-  // 2-5 mp3/wav files, 30-180s total. Matches the musicai intake of "MR-less
-  // pure vocal recordings, 2-3+ tracks" but extended for self-serve where
-  // users might upload shorter individual takes.
-  const VOICE_UPLOAD_MIN_FILES = 2;
-  const VOICE_UPLOAD_MAX_FILES = 5;
+  // 1 mp3/wav file, 10-60s. Matches YingMusic-SVC's reference-clip
+  // expectation (server/yingmusic.ts CloneOptions.targetHostPath).
+  const VOICE_UPLOAD_MIN_FILES = 1;
+  const VOICE_UPLOAD_MAX_FILES = 1;
   const VOICE_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
-  const VOICE_UPLOAD_MIN_SECONDS = 30;
-  const VOICE_UPLOAD_MAX_SECONDS = 180;
+  const VOICE_UPLOAD_MIN_SECONDS = 10;
+  const VOICE_UPLOAD_MAX_SECONDS = 60;
   const VOICE_ALLOWED_EXTS = new Set([".mp3", ".wav"]);
 
   const voiceUpload = multer({
@@ -476,14 +474,16 @@ export function mountApi(app: Express): void {
         return;
       }
 
+      // Zero-shot: the upload IS the voice. No training step, no
+      // weight/index artifacts to pair — status goes straight to 'ready'.
+      // epochs left NULL (column is nullable since migration 010).
       const { error: insErr } = await sb.from("user_voices").insert({
         id: voiceId,
         user_id: u.id,
         display_name: displayName,
         sample_paths: samplePaths,
         sample_seconds: Math.round(totalSec),
-        epochs: tierEpochsForTraining(u.tier),
-        status: "uploading",
+        status: "ready",
       });
       if (insErr) {
         await purgeVoiceSamples(u.id, voiceId);
@@ -492,8 +492,7 @@ export function mountApi(app: Express): void {
       res.status(201).json({
         voiceId,
         sampleSeconds: Math.round(totalSec),
-        epochs: tierEpochsForTraining(u.tier),
-        status: "uploading",
+        status: "ready",
       });
     } catch (err) {
       if (writtenDir) await purgeVoiceSamples(u.id, voiceId);
@@ -507,7 +506,7 @@ export function mountApi(app: Express): void {
       const { data, error } = await sb
         .from("user_voices")
         .select(
-          "id, display_name, sample_seconds, epochs, status, error, created_at, trained_at",
+          "id, display_name, sample_seconds, status, error, created_at, trained_at",
         )
         .eq("user_id", userId(req))
         .order("created_at", { ascending: false });
@@ -529,7 +528,7 @@ export function mountApi(app: Express): void {
       const { data, error } = await sb
         .from("user_voices")
         .select(
-          "id, display_name, sample_seconds, epochs, status, error, created_at, trained_at",
+          "id, display_name, sample_seconds, status, error, created_at, trained_at",
         )
         .eq("id", vid)
         .eq("user_id", userId(req))
@@ -542,91 +541,6 @@ export function mountApi(app: Express): void {
       res.json(data);
     } catch (err) {
       respondServerError(res, "GET /api/voices/:id", err);
-    }
-  });
-
-  // Kick off training. The voice must be in 'uploading' (post-sample-upload)
-  // or 'failed' (retry) state — already-training and trained voices reject
-  // with 409 to avoid double-enqueuing GPU work.
-  app.post("/api/voices/:id/train", requireAuth, async (req, res) => {
-    const vid = String(req.params.id ?? "");
-    if (!/^[A-Za-z0-9]+$/.test(vid)) {
-      res.status(400).json({ error: "invalid voice id" });
-      return;
-    }
-    try {
-      const u = req.user as AuthUser;
-      const sb = getSupabase();
-      const { data, error } = await sb
-        .from("user_voices")
-        .select("id, status, epochs")
-        .eq("id", vid)
-        .eq("user_id", u.id)
-        .maybeSingle();
-      if (error) throw error;
-      if (!data) {
-        res.status(404).json({ error: "voice not found" });
-        return;
-      }
-      const row = data as { id: string; status: string; epochs: number };
-      if (row.status !== "uploading" && row.status !== "failed") {
-        res.status(409).json({
-          error: `voice cannot be trained in '${row.status}' state`,
-        });
-        return;
-      }
-      // 'failed' retry: clear the artifact columns so the paired CHECK
-      // stays consistent when the worker flips status back to 'training'.
-      if (row.status === "failed") {
-        await sb
-          .from("user_voices")
-          .update({ error: null })
-          .eq("id", row.id);
-      }
-      const jobId = await enqueue(u.id, "rvc_train", {
-        voiceId: row.id,
-        epochs: row.epochs,
-      });
-      res.status(202).json({ jobId });
-    } catch (err) {
-      respondServerError(res, "POST /api/voices/:id/train", err);
-    }
-  });
-
-  // Trigger a demo inference: trained voice over the canned backing track.
-  // Returns the job id; FE polls /api/jobs/:id (existing route) and plays
-  // the resulting audioUrl when status='done'.
-  app.post("/api/voices/:id/demo", requireAuth, async (req, res) => {
-    const vid = String(req.params.id ?? "");
-    if (!/^[A-Za-z0-9]+$/.test(vid)) {
-      res.status(400).json({ error: "invalid voice id" });
-      return;
-    }
-    try {
-      const u = req.user as AuthUser;
-      const sb = getSupabase();
-      const { data, error } = await sb
-        .from("user_voices")
-        .select("id, status")
-        .eq("id", vid)
-        .eq("user_id", u.id)
-        .maybeSingle();
-      if (error) throw error;
-      if (!data) {
-        res.status(404).json({ error: "voice not found" });
-        return;
-      }
-      const row = data as { id: string; status: string };
-      if (row.status !== "trained") {
-        res.status(409).json({
-          error: `voice must be 'trained' to play a demo (currently '${row.status}')`,
-        });
-        return;
-      }
-      const jobId = await enqueue(u.id, "rvc_infer", { voiceId: row.id });
-      res.status(202).json({ jobId });
-    } catch (err) {
-      respondServerError(res, "POST /api/voices/:id/demo", err);
     }
   });
 

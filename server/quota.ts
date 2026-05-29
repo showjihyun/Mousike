@@ -37,23 +37,9 @@ const TIER_VOICE_CAPS: Record<string, number> = {
   pro:     3,
 };
 
-// Per-tier RVC training epochs. Fewer epochs = faster wall-clock (~10min
-// at 100ep vs ~25min at 250ep on a 4070 SUPER) at the cost of fidelity.
-// Free's 100ep gets a "(베타)" label in the UI to set expectations.
-const TIER_TRAIN_EPOCHS: Record<string, number> = {
-  free:    100,
-  starter: 200,
-  pro:     250,
-};
-
 export function tierVoiceCap(tier: string | null): number {
   if (tier === null) return 0;
   return TIER_VOICE_CAPS[tier] ?? 0;
-}
-
-export function tierEpochsForTraining(tier: string | null): number {
-  if (tier === null) return 0;
-  return TIER_TRAIN_EPOCHS[tier] ?? TIER_TRAIN_EPOCHS.free;
 }
 
 export async function readUsage(userId: string, tier: string): Promise<UsageState> {

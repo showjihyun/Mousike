@@ -261,15 +261,18 @@ export async function lego(args: {
   return pollJob(jobId, onProgress);
 }
 
-// --- Voice clone (Phase 1 of the musicai-stack pivot, ADR 0005) -------------
+// --- Voice clone (Phase 2 of the musicai-stack pivot, ADR 0006) -------------
+// YingMusic-SVC zero-shot: upload one reference clip → status='ready'
+// immediately. The legacy RVC states ('uploading'/'training'/'trained')
+// remain in the union for back-compat with rows on disk that pre-date the
+// migration; nothing the FE writes will ever produce them.
 
-export type VoiceStatus = "uploading" | "training" | "trained" | "failed";
+export type VoiceStatus = "uploading" | "training" | "trained" | "ready" | "failed";
 
 export interface UserVoice {
   id: string;
   displayName: string;
   sampleSeconds: number | null;
-  epochs: number;
   status: VoiceStatus;
   error: string | null;
   createdAt: string;
@@ -283,7 +286,6 @@ interface RawUserVoice {
   id: string;
   display_name: string;
   sample_seconds: number | null;
-  epochs: number;
   status: VoiceStatus;
   error: string | null;
   created_at: string;
@@ -295,7 +297,6 @@ function toUserVoice(r: RawUserVoice): UserVoice {
     id: r.id,
     displayName: r.display_name,
     sampleSeconds: r.sample_seconds,
-    epochs: r.epochs,
     status: r.status,
     error: r.error,
     createdAt: r.created_at,
@@ -317,48 +318,6 @@ export async function fetchVoices(): Promise<UserVoice[]> {
   }
   const data = (await res.json()) as { voices: RawUserVoice[] };
   return data.voices.map(toUserVoice);
-}
-
-export async function startVoiceTraining(voiceId: string): Promise<{ jobId: string }> {
-  let res: Response;
-  try {
-    res = await fetch(`${BACKEND_URL}/api/voices/${voiceId}/train`, {
-      method: "POST",
-      credentials: "include",
-    });
-  } catch (e) {
-    if (isNetworkError(e)) throw new Error(NETWORK_ERR_KO);
-    throw e;
-  }
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error ?? `Backend error ${res.status}`);
-  }
-  return (await res.json()) as { jobId: string };
-}
-
-// Enqueue + poll combined — mirrors the repaint/lego shape. Returns the
-// rendered demo audio (BackendSong[]) when the rvc_infer job finishes.
-export async function requestVoiceDemo(
-  voiceId: string,
-  onProgress?: ProgressCallback,
-): Promise<BackendSong[]> {
-  let res: Response;
-  try {
-    res = await fetch(`${BACKEND_URL}/api/voices/${voiceId}/demo`, {
-      method: "POST",
-      credentials: "include",
-    });
-  } catch (e) {
-    if (isNetworkError(e)) throw new Error(NETWORK_ERR_KO);
-    throw e;
-  }
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error ?? `Backend error ${res.status}`);
-  }
-  const { jobId } = (await res.json()) as { jobId: string };
-  return pollJob(jobId, onProgress);
 }
 
 export async function deleteVoice(voiceId: string): Promise<void> {
@@ -403,7 +362,6 @@ export async function uploadVoiceSamples(
   const data = (await res.json()) as {
     voiceId: string;
     sampleSeconds: number;
-    epochs: number;
     status: VoiceStatus;
   };
   // The BE responds with a subset of the row — synthesise the full UserVoice
@@ -412,7 +370,6 @@ export async function uploadVoiceSamples(
     id: data.voiceId,
     displayName,
     sampleSeconds: data.sampleSeconds,
-    epochs: data.epochs,
     status: data.status,
     error: null,
     createdAt: new Date().toISOString(),

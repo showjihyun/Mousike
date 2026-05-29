@@ -2138,11 +2138,6 @@ input, textarea {
   color: rgba(0, 0, 0, 0.6);
   margin: 0 0 24px;
 }
-.voice-beta-label {
-  color: var(--mou-accent-2);
-  font-weight: 500;
-}
-
 .voice-gate {
   max-width: 480px;
   margin: 80px auto;
@@ -2243,17 +2238,6 @@ input, textarea {
   font-size: 12px;
   color: rgba(0, 0, 0, 0.5);
 }
-.voice-file-list {
-  list-style: none;
-  padding: 0;
-  margin: 8px 0 0;
-  font-size: 12px;
-  color: rgba(0, 0, 0, 0.6);
-}
-.voice-file-list li {
-  padding: 2px 0;
-}
-
 .voice-upload-actions {
   display: flex;
   align-items: center;
