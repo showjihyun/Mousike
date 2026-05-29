@@ -5,6 +5,10 @@
 # server/acestep.ts client at the new container name.
 
 services:
+  # FALLBACK-ONLY in Phase 2 (ADR 0006). YingMusic-SVC (below) is the
+  # default voice path; this service stays so an operator can re-route to
+  # RVC via a manual job insert if YingMusic regresses. Safe to leave
+  # stopped (`docker compose stop rvc`) in normal operation.
   rvc:
     # The RVC-Project/Retrieval-based-Voice-Conversion-WebUI repo ships
     # a Dockerfile but no published image. Build locally:

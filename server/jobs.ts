@@ -28,6 +28,10 @@ const execFileAsync = promisify(execFile);
 
 const PORT = 8787;
 
+// rvc_train / rvc_infer are FALLBACK-ONLY in Phase 2 (ADR 0006) — no
+// user-facing route enqueues them. They remain in the union so the
+// worker can still claim and process any rows an operator inserts
+// directly for emergency fallback or A/B comparison.
 export type JobKind = "generate" | "repaint" | "lego" | "rvc_train" | "rvc_infer" | "yingmusic_clone";
 export type JobStatus = "queued" | "running" | "done" | "failed";
 

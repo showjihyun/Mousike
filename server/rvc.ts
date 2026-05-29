@@ -1,5 +1,14 @@
-// RVC voice-clone client. Every RVC operation runs as a Python script
-// inside the rvc container via `docker exec … /runner/<script>`:
+// RVC voice-clone client. FALLBACK-ONLY as of Phase 2 (ADR 0006) —
+// YingMusic-SVC (server/yingmusic.ts) is the default voice path. The
+// rvc_train / rvc_infer job kinds and the rvc container in
+// docker-compose are retained so an operator can re-route to RVC via a
+// future env-flag or DB-driven kind selector if YingMusic regresses, but
+// there are no user-facing surfaces that enqueue RVC work — POST
+// /api/voices/:id/train and /demo were removed in Phase 2 step 2 and
+// the upload flow inserts user_voices.status='ready' directly.
+//
+// Every RVC operation runs as a Python script inside the rvc container
+// via `docker exec … /runner/<script>`:
 //
 //   • Training  (trainVoice)          → /runner/train.py    (train1key)
 //   • Inference (inferOnBackingTrack) → /runner/vc_infer.py (VC.vc_single)

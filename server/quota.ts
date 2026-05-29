@@ -28,9 +28,9 @@ const TIER_RULES: Record<string, TierRule> = {
   pro:     { windowMs: 24 * 60 * 60 * 1000,           limit: null, periodLabel: "무제한" },
 };
 
-// Voice-clone caps. Phase 1 of the musicai-stack pivot (ADR 0005):
-// Free + Starter can train one voice; Pro keeps three on file. Anonymous
-// callers can't train at all (no row to hang a user_voices.user_id on).
+// Voice-clone caps. Phase 2 (ADR 0006): Free + Starter can keep one
+// YingMusic reference voice; Pro keeps three on file. Anonymous callers
+// can't upload at all (no row to hang a user_voices.user_id on).
 const TIER_VOICE_CAPS: Record<string, number> = {
   free:    1,
   starter: 1,
