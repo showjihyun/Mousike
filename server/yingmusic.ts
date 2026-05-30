@@ -39,11 +39,12 @@ const OUTPUTS_HOST_ROOT = join(YINGMUSIC_SRC, "outputs");
 // runaway hang.
 const INFER_TIMEOUT_MS = 10 * 60_000;
 // chain.sh adds a BR Separator pass (30-90s) before YingMusic; for a Pro
-// 3min source the whole chain is ~5-7min wall. The chain is called AFTER
-// ACE-Step inside the same runJob, so the budget shared with ACE-Step (~3-4min
-// for Pro 3min songs) has to stay under jobs.ts:RUNNING_TTL_MS (15min) or the
-// sweep false-fails a legitimately-running job. 11min leaves a ~3-min cushion
-// for ACE-Step + watermark + slack.
+// 3min source the whole chain is ~5-11min wall. The chain runs AFTER
+// ACE-Step inside the same runJob, so the shared budget with ACE-Step
+// (~4-6min on a 4070 SUPER for Pro 3min songs) has to stay under
+// jobs.ts:RUNNING_TTL_MS (now 20min, bumped from 15min to accommodate this).
+// 11min here leaves ~4min headroom over ACE-Step's worst case before the
+// sweep can race.
 const CHAIN_TIMEOUT_MS = 11 * 60_000;
 
 export interface CloneOptions {

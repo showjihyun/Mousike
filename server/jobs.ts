@@ -146,9 +146,13 @@ export const PER_USER_INFLIGHT_CAP = 2;
 // row, post-boot recovery missed it) both eventually fill the global cap and
 // 503 honest traffic. Sweep flips them to failed.
 const QUEUED_TTL_MS = 60 * 60_000;     // 1h — generous for a popular slot
-const RUNNING_TTL_MS = 15 * 60_000;    // 15min — ACE-Step gen/repaint/lego + rvc_infer (Pro 3min + watermark + slack)
+// 20min covers worst-case Pro 3min generate (~4-6min ACE-Step) plus the
+// YingMusic auto-chain (~5-11min wall — yingmusic.ts:CHAIN_TIMEOUT_MS is
+// 11min) plus watermark + slack. Was 15min pre-Phase-2 when generate didn't
+// route through the chain; that budget false-failed Pro chain runs.
+const RUNNING_TTL_MS = 20 * 60_000;
 // rvc_train runs ~15-25min (ADR 0005); rvc.ts caps the docker-exec runner
-// at 60min, so the sweep is a backstop just past that — NOT the 15min above,
+// at 60min, so the sweep is a backstop just past that — NOT the 20min above,
 // which would false-fail every legitimate training job.
 const RVC_TRAIN_RUNNING_TTL_MS = 65 * 60_000;
 const SWEEP_INTERVAL_MS = 60_000;      // run once per minute
