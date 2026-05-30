@@ -1,0 +1,108 @@
+# Phase 1 of the musicai-stack pivot (ADR 0004, 0005).
+# RVC voice-cloning service. ACE-Step is currently run via manual
+# `docker run` — when migrating it to compose, add an `ace-step:`
+# service block here on port 7860 and point the existing
+# server/acestep.ts client at the new container name.
+
+services:
+  # FALLBACK-ONLY in Phase 2 (ADR 0006). YingMusic-SVC (below) is the
+  # default voice path; this service stays so an operator can re-route to
+  # RVC via a manual job insert if YingMusic regresses. Safe to leave
+  # stopped (`docker compose stop rvc`) in normal operation.
+  rvc:
+    # The RVC-Project/Retrieval-based-Voice-Conversion-WebUI repo ships
+    # a Dockerfile but no published image. Build locally:
+    #   git clone https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI
+    #   cd Retrieval-based-Voice-Conversion-WebUI && docker build -t rvc-webui .
+    # Then `docker compose up rvc` here.
+    image: rvc-webui:latest
+    container_name: rvc
+    # Docker's default /dev/shm is 64MB. RVC training's PyTorch DataLoader
+    # (num_workers>0) passes tensors between workers via shared memory; with
+    # a real training set (e.g. 53s / 16 segments) 64MB is exhausted within a
+    # few epochs → "DataLoader worker killed by signal: Bus error" → train_nsf
+    # dies, and train1key swallows it and reports success with no model saved.
+    # 2GB is ample headroom for the batch/segment sizes we train at.
+    shm_size: "2gb"
+    ports:
+      - "7865:7865"  # Gradio default. ACE-Step uses 7860 — no conflict.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      # Bind mounts so server/voice-storage.ts can read/write directly
+      # without docker cp shuttling. Container-side paths match RVC's
+      # Dockerfile layout (FROM nvidia/cuda + WORKDIR /app):
+      #   - dataset path is freeform — we pass /app/dataset/<uid>/<vid>
+      #     as the trainset_dir4 arg to train1key
+      #   - weights live at /app/assets/weights/ (RVC writes final .pth
+      #     and added_IVF*.index here)
+      #   - backing track read-only; rvc.ts passes /app/backing/<file>
+      #     as the input_audio_path arg to vc_single
+      - ./server/voice-samples:/app/dataset
+      - ./server/voice-models:/app/assets/weights
+      - ./server/voice-train-logs:/app/logs
+      - ./server/voice-demo-backing:/app/backing:ro
+      # RVC needs silent-padding files at /app/logs/mute/ for short
+      # training data (referenced from filelist). The voice-train-logs
+      # bind above shadows the image's bundled copy; a sibling cleanup
+      # of voice-train-logs/* wipes mute too and training silently dies
+      # with FileNotFoundError that train1key swallows. Nested-bind the
+      # mute dir from a dedicated host path so it survives such cleanups.
+      - ./server/voice-rvc-mute:/app/logs/mute
+      # Python wrapper that runs train1key via `docker exec`. RVC's
+      # Gradio 3.34 generator-based training can't be driven via raw HTTP
+      # (queue=None + first-yield-only behavior), so server/rvc.ts spawns
+      # `docker exec rvc python /runner/train.py <json-args>` instead.
+      - ./server/rvc-runner:/runner:ro
+      # PyTorch 2.6+ weights_only patch — see sitecustomize.py header.
+      # Mounted directly into Python's site-packages so it auto-loads
+      # for the main Gradio server AND every spawned training subprocess.
+      - ./server/rvc-runner/sitecustomize.py:/usr/lib/python3.9/sitecustomize.py:ro
+      # Korean-language pretrained weights (KLM by SeoulStreamingStation).
+      # The bundled assets/pretrained_v2/f0G40k.pth was trained on English /
+      # Chinese vocals — fine-tuning Korean targets on top of it produces
+      # robotic output. KLM is RVC v2 40k trained on Korean voice actors +
+      # vocalists; rvc.ts passes these paths as pretrainG/pretrainD.
+      - ./server/voice-pretrained:/app/assets/pretrained_klm:ro
+    restart: unless-stopped
+
+  # Phase 2 (ADR 0006): zero-shot SVC via YingMusic-SVC. Eventually replaces
+  # the per-voice rvc_train pipeline. Source repo lives outside Mousike — set
+  # YINGMUSIC_SRC in .env to override the default host path.
+  yingmusic:
+    build:
+      context: ./server/yingmusic
+      dockerfile: Dockerfile
+    image: mousike-yingmusic:latest
+    container_name: yingmusic
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      # YingMusic-SVC source + checkpoint (lives outside this repo — large).
+      # `git clone https://github.com/GiantAILab/YingMusic-SVC` to YINGMUSIC_SRC,
+      # download YingMusic-SVC-full.pt into <src>/ckpt/ — see server/yingmusic/README.md.
+      - ${YINGMUSIC_SRC:-../YingMusic-SVC}:/app
+      # Mousike-side audio inputs. Three roots since uploads, curated test
+      # refs, and ACE-Step generation outputs live in different host trees:
+      #   /data            → ./voice                  (curated test refs in voice/sample/)
+      #   /data/_uploads   → ./server/voice-samples   (per-user voice refs)
+      #   /data/_aceout    → ./server/audio-secure    (clean ACE-Step output, chain source)
+      # yingmusic.ts:toContainerPath translates host paths under any root.
+      - ./voice:/data:ro
+      - ./server/voice-samples:/data/_uploads:ro
+      - ./server/audio-secure:/data/_aceout:ro
+      # Persistent HF / Torch hub cache so BigVGAN + Whisper survive container
+      # recreates (otherwise re-downloaded on every cold start).
+      - ./server/yingmusic-cache:/cache
+    restart: unless-stopped
+

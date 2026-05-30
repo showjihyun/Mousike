@@ -9,17 +9,30 @@
 //   - queuedDepth:           global queue depth (back-pressure / 503)
 //   - countUsedPlusInFlight: quota check that includes pending jobs so a user
 //                            can't pre-queue past their daily/monthly limit.
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { randomBytes } from "crypto";
+import { promises as fsp } from "fs";
+import { join } from "path";
 import { getSupabase } from "./db.js";
 import { translateKoreanToEnglish } from "./ollama.js";
 import { runAceStep } from "./acestep.js";
-import { prepareSourceForAceStep, processAudio } from "./audio.js";
+import { AUDIO_SECURE_DIR, prepareSourceForAceStep, processAudio, processAudioFromHost } from "./audio.js";
 import { applyGenreTag, genreByCategory, resolveGenre, withQualitySuffix, type GenreCategory } from "./genre.js";
-import { logUsage } from "./quota.js";
+import { logUsage, type UsageAction } from "./quota.js";
+import { inferOnBackingTrack, trainVoice } from "./rvc.js";
+import { cleanupChainOutputs, cloneAndRemix, cloneOnto, pingYingMusic } from "./yingmusic.js";
+import { purgeVoiceSamples, resolveVoiceSamplePath } from "./voice-storage.js";
+
+const execFileAsync = promisify(execFile);
 
 const PORT = 8787;
 
-export type JobKind = "generate" | "repaint" | "lego";
+// rvc_train / rvc_infer are FALLBACK-ONLY in Phase 2 (ADR 0006) — no
+// user-facing route enqueues them. They remain in the union so the
+// worker can still claim and process any rows an operator inserts
+// directly for emergency fallback or A/B comparison.
+export type JobKind = "generate" | "repaint" | "lego" | "rvc_train" | "rvc_infer" | "yingmusic_clone";
 export type JobStatus = "queued" | "running" | "done" | "failed";
 
 // User's literal choice on /api/generate. "auto" is resolved server-side via
@@ -65,7 +78,37 @@ export interface LegoPayload {
   durationSec: number;
 }
 
-export type JobPayload = GeneratePayload | RepaintPayload | LegoPayload;
+// RVC voice-clone job kinds. Both reference a user_voices row by id;
+// the worker reads sample paths / weight paths from that row rather than
+// embedding them in the payload, so a single training-completion
+// transaction (status → 'trained', weight_path set) atomically promotes
+// every queued infer to succeed.
+export interface RvcTrainPayload {
+  voiceId: string;
+  epochs: number;
+}
+
+export interface RvcInferPayload {
+  voiceId: string;
+}
+
+// Phase 2 zero-shot SVC (ADR 0006). Worker reads sample_paths[0] off
+// user_voices for the target reference; sourceHostPath is the vocal stem
+// to convert (produced by the ACE-Step + BR-separator chain). Both paths
+// must live under directories bind-mounted into the yingmusic container —
+// see yingmusic.ts:toContainerPath for the allowed roots.
+export interface YingmusicClonePayload {
+  voiceId: string;
+  sourceHostPath: string;
+}
+
+export type JobPayload =
+  | GeneratePayload
+  | RepaintPayload
+  | LegoPayload
+  | RvcTrainPayload
+  | RvcInferPayload
+  | YingmusicClonePayload;
 
 export interface JobSong {
   id: string;
@@ -103,7 +146,15 @@ export const PER_USER_INFLIGHT_CAP = 2;
 // row, post-boot recovery missed it) both eventually fill the global cap and
 // 503 honest traffic. Sweep flips them to failed.
 const QUEUED_TTL_MS = 60 * 60_000;     // 1h — generous for a popular slot
-const RUNNING_TTL_MS = 15 * 60_000;    // 15min — Pro 3min + watermark + slack
+// 20min covers worst-case Pro 3min generate (~4-6min ACE-Step) plus the
+// YingMusic auto-chain (~5-11min wall — yingmusic.ts:CHAIN_TIMEOUT_MS is
+// 11min) plus watermark + slack. Was 15min pre-Phase-2 when generate didn't
+// route through the chain; that budget false-failed Pro chain runs.
+const RUNNING_TTL_MS = 20 * 60_000;
+// rvc_train runs ~15-25min (ADR 0005); rvc.ts caps the docker-exec runner
+// at 60min, so the sweep is a backstop just past that — NOT the 20min above,
+// which would false-fail every legitimate training job.
+const RVC_TRAIN_RUNNING_TTL_MS = 65 * 60_000;
 const SWEEP_INTERVAL_MS = 60_000;      // run once per minute
 
 function audioUrl(filename: string): string {
@@ -116,12 +167,47 @@ function mintJobId(): string {
   return randomBytes(12).toString("hex");
 }
 
+// Tier → priority snapshot for the queue. See migration 009 header for why
+// this is a snapshot taken at enqueue time rather than re-read at claim.
+function tierToPriority(tier: string | null): number {
+  if (tier === "pro") return 3;
+  if (tier === "starter") return 2;
+  if (tier === "free") return 1;
+  return 0;
+}
+
+// Read the user's current tier. Returns null on any failure so we degrade
+// to priority 0 (back of queue) rather than 500ing on enqueue — a missing
+// tier read is recoverable; a refused enqueue is not.
+async function lookupUserTier(userId: string | null): Promise<string | null> {
+  if (userId === null) return null;
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from("users")
+    .select("tier")
+    .eq("id", userId)
+    .maybeSingle();
+  if (error) {
+    console.error(`[jobs] lookupUserTier(${userId}):`, error.message);
+    return null;
+  }
+  return (data as { tier?: string } | null)?.tier ?? null;
+}
+
 export async function enqueue(
   userId: string | null,
   kind: JobKind,
   payload: JobPayload,
 ): Promise<string> {
+  // Fail-fast for yingmusic_clone: if the worker container is down, refuse
+  // the enqueue rather than letting the row sit until the sweep TTL fires.
+  // Route handlers should pre-check pingYingMusic() to 503 cleanly; this is
+  // the backstop for any other caller.
+  if (kind === "yingmusic_clone" && !(await pingYingMusic())) {
+    throw new Error("yingmusic worker unavailable");
+  }
   const id = mintJobId();
+  const priority = tierToPriority(await lookupUserTier(userId));
   const sb = getSupabase();
   const { error } = await sb.from("jobs").insert({
     id,
@@ -129,6 +215,7 @@ export async function enqueue(
     kind,
     status: "queued",
     payload,
+    priority,
   });
   if (error) throw error;
   notifyWorker();
@@ -224,6 +311,26 @@ export async function countUsedPlusInFlight(
   return (logRes.count ?? 0) + (jobRes.count ?? 0);
 }
 
+// Boot-time sweep of orphaned chain-staging files. chainAceOutputs writes
+// each ACE-Step output as audio-secure/_pending-<jobId>-<i>.mp3 and unlinks
+// it in a finally block; a worker SIGKILL between the docker cp and the
+// finally leaks the transient indefinitely (AUDIO_SECURE_DIR has no other
+// janitor). One pass at boot keeps the dir from accreting them. Errors are
+// logged and swallowed — disk-usage, not correctness.
+export async function sweepPendingTransients(): Promise<number> {
+  try {
+    const entries = await fsp.readdir(AUDIO_SECURE_DIR);
+    const pending = entries.filter((f) => f.startsWith("_pending-"));
+    await Promise.all(
+      pending.map((f) => fsp.unlink(join(AUDIO_SECURE_DIR, f)).catch(() => {})),
+    );
+    return pending.length;
+  } catch (err) {
+    console.error("[jobs] sweepPendingTransients:", err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
 // Boot-time recovery: any 'running' row at startup belonged to the previous
 // process, which is now gone. Mark them failed so the polling client sees
 // a clear failure instead of waiting forever.
@@ -244,31 +351,44 @@ export async function recoverStaleRunning(): Promise<number> {
 
 // Periodic sweep that complements recoverStaleRunning. Catches:
 //   - queued rows older than QUEUED_TTL_MS (client abandoned the poll)
-//   - running rows older than RUNNING_TTL_MS (worker hung past the ACE-Step
-//     timeout; safety net behind acestep.ts's per-fetch AbortSignal)
-// Both classes get flipped to 'failed' so the global queue cap doesn't
-// silently fill up with dead rows.
+//   - running rows older than their kind's TTL (worker hung past the
+//     workload's own timeout; safety net behind the per-job AbortSignal /
+//     docker-exec runner timeout)
+// All get flipped to 'failed' so the global queue cap doesn't silently
+// fill up with dead rows. rvc_train uses a much longer TTL because a real
+// training run is ~15-25min — the 15min default would false-fail it.
 async function sweepStaleJobs(): Promise<number> {
   const sb = getSupabase();
   const now = Date.now();
   const queuedCutoff = new Date(now - QUEUED_TTL_MS).toISOString();
   const runningCutoff = new Date(now - RUNNING_TTL_MS).toISOString();
+  const trainCutoff = new Date(now - RVC_TRAIN_RUNNING_TTL_MS).toISOString();
   const finishedAt = new Date(now).toISOString();
-  const [queuedRes, runningRes] = await Promise.all([
+  const [queuedRes, runningRes, trainRes] = await Promise.all([
     sb.from("jobs")
       .update({ status: "failed", error: "timed out while queued", finished_at: finishedAt })
       .eq("status", "queued")
       .lt("created_at", queuedCutoff)
       .select("id"),
+    // Short-running kinds: everything except rvc_train.
     sb.from("jobs")
       .update({ status: "failed", error: "timed out while running", finished_at: finishedAt })
       .eq("status", "running")
+      .neq("kind", "rvc_train")
       .lt("started_at", runningCutoff)
+      .select("id"),
+    // rvc_train: long backstop just past rvc.ts's 60min runner cap.
+    sb.from("jobs")
+      .update({ status: "failed", error: "timed out while running", finished_at: finishedAt })
+      .eq("status", "running")
+      .eq("kind", "rvc_train")
+      .lt("started_at", trainCutoff)
       .select("id"),
   ]);
   if (queuedRes.error) throw queuedRes.error;
   if (runningRes.error) throw runningRes.error;
-  return (queuedRes.data?.length ?? 0) + (runningRes.data?.length ?? 0);
+  if (trainRes.error) throw trainRes.error;
+  return (queuedRes.data?.length ?? 0) + (runningRes.data?.length ?? 0) + (trainRes.data?.length ?? 0);
 }
 
 // Worker loop internals. Single-instance, single-loop — no JS-level mutex
@@ -312,10 +432,14 @@ async function claimNextJob(): Promise<ClaimedJob | null> {
   // SELECT-then-UPDATE is race-free without explicit row locks. If we ever
   // run multiple workers, swap this for a `claim_next_job()` RPC that uses
   // `for update skip locked`.
+  // Order: priority DESC (Pro=3 → Starter=2 → Free=1 → anon=0), then
+  // created_at ASC for FIFO within a priority level. Backed by
+  // jobs_claim_idx (migration 009).
   const { data, error } = await sb
     .from("jobs")
     .select("id, user_id, kind, payload")
     .eq("status", "queued")
+    .order("priority", { ascending: false })
     .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle();
@@ -351,6 +475,101 @@ async function markFailed(jobId: string, message: string): Promise<void> {
     })
     .eq("id", jobId);
   if (error) console.error("[jobs] markFailed:", error.message);
+}
+
+// Look up the user's 'ready' YingMusic voice for the auto-chain step in
+// generate. Returns the first ready row (newest first via the index) or
+// null when there's nothing to apply. Errors degrade to null — the chain
+// is an enhancement, not a correctness requirement, and falling back to
+// plain ACE-Step output is the right failure mode.
+interface ReadyVoice {
+  id: string;
+  sample_paths: string[];
+}
+async function lookupReadyVoice(userId: string): Promise<ReadyVoice | null> {
+  try {
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from("user_voices")
+      .select("id, sample_paths")
+      .eq("user_id", userId)
+      .eq("status", "ready")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.error(`[jobs] lookupReadyVoice(${userId}):`, error.message);
+      return null;
+    }
+    if (!data) return null;
+    const row = data as ReadyVoice;
+    if (!row.sample_paths || row.sample_paths.length === 0) return null;
+    return row;
+  } catch (e) {
+    console.error(`[jobs] lookupReadyVoice(${userId}):`, e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+// Auto-chain: ACE-Step output → BR-separate → clone vocals onto user's
+// ready voice → echo+reverb remix with the instrumental. Replaces
+// processAudio's docker-cp + watermark path when the user has a ready
+// voice. Returns the same shape (watermarked filenames in audio-cache).
+//
+// Transient flow per ACE-Step output:
+//   1. docker cp ace-step:<containerPath> → audio-secure/_pending-<id>.mp3
+//      (audio-secure is bind-mounted into the yingmusic container as
+//       /data/_aceout, so the chain runner reads it via that root)
+//   2. cloneAndRemix → final wav in <YINGMUSIC_SRC>/outputs/<expname>/accompany/
+//   3. processAudioFromHost on the chain wav: copy to audio-secure/<stem>.mp3,
+//      watermark to audio-cache/<stem>-wm.mp3, unlink the chain wav
+//   4. unlink the _pending-*.mp3 transient
+async function chainAceOutputs(
+  containerPaths: string[],
+  voice: ReadyVoice,
+  jobId: string,
+): Promise<string[]> {
+  const targetHostPath = resolveVoiceSamplePath(voice.sample_paths[0]);
+  const filenames: string[] = [];
+  for (let i = 0; i < containerPaths.length; i++) {
+    const containerPath = containerPaths[i];
+    const expname = `${jobId}-${i}`;
+    const transient = join(AUDIO_SECURE_DIR, `_pending-${jobId}-${i}.mp3`);
+    try {
+      await execFileAsync("docker", ["cp", `ace-step:${containerPath}`, transient]);
+      const chainOut = await cloneAndRemix({
+        sourceHostPath: transient,
+        targetHostPath,
+        expname,
+      });
+      const [filename] = await processAudioFromHost([chainOut]);
+      filenames.push(filename);
+    } finally {
+      await fsp.unlink(transient).catch(() => {});
+      // GC YingMusic intermediates whether the chain succeeded or threw;
+      // a failed run still leaves the BR-separator stems on disk and
+      // there's no other janitor.
+      await cleanupChainOutputs(expname);
+    }
+  }
+  return filenames;
+}
+
+// Pre-flight gate for ACE-Step branches (generate / repaint / lego): if the
+// user has a 'ready' voice, the post-ACE-Step chain WILL try to docker-exec
+// yingmusic. Probing the container BEFORE we burn ACE-Step time means a
+// stopped/unhealthy yingmusic fails the job in ~50ms instead of after a
+// 3-min ACE-Step run that gets discarded. Returns the voice to chain onto,
+// or null when the user has no voice (plain ACE-Step path).
+async function preflightVoiceChain(userId: string | null, jobId: string): Promise<ReadyVoice | null> {
+  if (!userId) return null;
+  const voice = await lookupReadyVoice(userId);
+  if (!voice) return null;
+  if (!(await pingYingMusic())) {
+    throw new Error("yingmusic worker unavailable — cannot apply user voice");
+  }
+  console.log(`[job ${jobId}] chain via voice=${voice.id}`);
+  return voice;
 }
 
 // Vocal-language auto rule (see CONTEXT.md). Pure: caller supplies the inputs.
@@ -432,6 +651,11 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       `lyrics=${lyricsOverride ? `${lyricsOverride.length}chars` : "none"} ` +
       `vocal=${vocalLanguage}(${p.vocalLanguage}) caption="${caption}"`,
     );
+    // Pre-flight: if user has a 'ready' voice but yingmusic is down, fail now
+    // instead of burning ACE-Step time and discarding the result. Failure
+    // propagates as a job failure — silent fallback to default vocal would
+    // surprise a user who explicitly asked for their voice.
+    const readyVoice = await preflightVoiceChain(job.user_id, job.id);
     const paths = await runAceStep({
       task: "text2music",
       caption,
@@ -441,13 +665,172 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       ...(keyOverride !== undefined && { key: keyOverride }),
       ...(lyricsOverride !== undefined && { lyrics: lyricsOverride }),
     });
-    const filenames = await processAudio(paths);
+    const filenames = readyVoice
+      ? await chainAceOutputs(paths, readyVoice, job.id)
+      : await processAudio(paths);
     const songs: JobSong[] = filenames.map((filename, i) => ({
       id: `${Date.now()}-${i}`,
       audioUrl: audioUrl(filename),
       prompt: p.prompt,
       vocalLanguage,
       ...(translatedCaption !== undefined && { translatedCaption }),
+    }));
+    return { songs };
+  }
+
+  if (job.kind === "rvc_train") {
+    const p = job.payload as RvcTrainPayload;
+    if (!job.user_id) throw new Error("rvc_train requires an authenticated user");
+    const sb = getSupabase();
+    // Load the voice row + its sample paths. We snapshot only what we need
+    // for the training call; the row gets a full update on completion.
+    const { data: voiceRow, error: vErr } = await sb
+      .from("user_voices")
+      .select("id, user_id, sample_paths, display_name")
+      .eq("id", p.voiceId)
+      .eq("user_id", job.user_id)
+      .maybeSingle();
+    if (vErr) throw vErr;
+    if (!voiceRow) throw new Error(`voice ${p.voiceId} not found`);
+    const row = voiceRow as {
+      id: string;
+      user_id: string;
+      sample_paths: string[];
+      display_name: string;
+    };
+    const hostPaths = row.sample_paths.map(resolveVoiceSamplePath);
+
+    // Flip to 'training' so the FE poll surfaces the transition. The row
+    // is left with weight/index NULL — the paired-artifact CHECK
+    // (user_voices_artifacts_paired) tolerates this because status != 'trained'.
+    await sb
+      .from("user_voices")
+      .update({ status: "training" })
+      .eq("id", row.id);
+
+    console.log(`[job ${job.id}] rvc_train ${row.id} (${row.display_name}) ${p.epochs}ep`);
+    try {
+      const { weightPath, indexPath } = await trainVoice({
+        userId: row.user_id,
+        voiceId: row.id,
+        sampleHostPaths: hostPaths,
+        epochs: p.epochs,
+      });
+
+      // Atomically flip to 'trained' with both artifacts set. The CHECK
+      // requires all three (weight_path, index_path, trained_at) together.
+      await sb
+        .from("user_voices")
+        .update({
+          status: "trained",
+          weight_path: weightPath,
+          index_path: indexPath,
+          trained_at: new Date().toISOString(),
+        })
+        .eq("id", row.id);
+
+      // Raw samples are no longer needed — the .pth + .index are the voice.
+      // Failure here is logged + swallowed by voice-storage.
+      await purgeVoiceSamples(row.user_id, row.id);
+
+      return { songs: [] };
+    } catch (e) {
+      // Mirror the job failure onto the voice row so the FE doesn't show
+      // a perpetually-spinning "학습 중" badge for a job that died. The
+      // jobs table gets its own failed flip via workerTick's catch.
+      const errMsg = e instanceof Error ? e.message : String(e);
+      await sb
+        .from("user_voices")
+        .update({ status: "failed", error: errMsg.slice(0, 500) })
+        .eq("id", row.id);
+      throw e;
+    }
+  }
+
+  if (job.kind === "rvc_infer") {
+    const p = job.payload as RvcInferPayload;
+    if (!job.user_id) throw new Error("rvc_infer requires an authenticated user");
+    const sb = getSupabase();
+    const { data: voiceRow, error: vErr } = await sb
+      .from("user_voices")
+      .select("id, display_name, status, weight_path, index_path")
+      .eq("id", p.voiceId)
+      .eq("user_id", job.user_id)
+      .maybeSingle();
+    if (vErr) throw vErr;
+    if (!voiceRow) throw new Error(`voice ${p.voiceId} not found`);
+    const row = voiceRow as {
+      id: string;
+      display_name: string;
+      status: string;
+      weight_path: string | null;
+      index_path: string | null;
+    };
+    if (row.status !== "trained" || !row.weight_path || !row.index_path) {
+      throw new Error(`voice ${row.id} is not trained (status=${row.status})`);
+    }
+
+    console.log(`[job ${job.id}] rvc_infer ${row.id} (${row.display_name})`);
+    const containerOutputHostPath = await inferOnBackingTrack({
+      weightPath: row.weight_path,
+      indexPath: row.index_path,
+    });
+
+    // The rvc.ts helper already copied the output off the container, so
+    // feed the host path directly to the from-host pipeline (skips the
+    // docker cp leg that processAudio normally does for ACE-Step).
+    const filenames = await processAudioFromHost([containerOutputHostPath]);
+
+    const songs: JobSong[] = filenames.map((filename, i) => ({
+      id: `voice-demo-${Date.now()}-${i}`,
+      audioUrl: audioUrl(filename),
+      prompt: `${row.display_name} 들어보기`,
+      vocalLanguage: "unknown",
+    }));
+    return { songs };
+  }
+
+  if (job.kind === "yingmusic_clone") {
+    const p = job.payload as YingmusicClonePayload;
+    if (!job.user_id) throw new Error("yingmusic_clone requires an authenticated user");
+    const sb = getSupabase();
+    const { data: voiceRow, error: vErr } = await sb
+      .from("user_voices")
+      .select("id, display_name, status, sample_paths")
+      .eq("id", p.voiceId)
+      .eq("user_id", job.user_id)
+      .maybeSingle();
+    if (vErr) throw vErr;
+    if (!voiceRow) throw new Error(`voice ${p.voiceId} not found`);
+    const row = voiceRow as {
+      id: string;
+      display_name: string;
+      status: string;
+      sample_paths: string[];
+    };
+    if (row.status !== "ready") {
+      throw new Error(`voice ${row.id} is not ready (status=${row.status})`);
+    }
+    if (row.sample_paths.length === 0) {
+      throw new Error(`voice ${row.id} has no reference sample`);
+    }
+    // YingMusic is zero-shot: the first uploaded clip is the reference.
+    // Phase-2 upload UI uploads exactly one clip per voice (commit 2/4).
+    const targetHostPath = resolveVoiceSamplePath(row.sample_paths[0]);
+
+    console.log(`[job ${job.id}] yingmusic_clone ${row.id} (${row.display_name})`);
+    const outputHostPath = await cloneOnto({
+      sourceHostPath: p.sourceHostPath,
+      targetHostPath,
+      expname: job.id,
+    });
+
+    const filenames = await processAudioFromHost([outputHostPath]);
+    const songs: JobSong[] = filenames.map((filename, i) => ({
+      id: `voice-clone-${Date.now()}-${i}`,
+      audioUrl: audioUrl(filename),
+      prompt: `${row.display_name} 보컬`,
+      vocalLanguage: "unknown",
     }));
     return { songs };
   }
@@ -462,6 +845,10 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       `[job ${job.id}] repaint ${p.startSec}s–${p.endSec}s ` +
       `genre=${genre?.category ?? "none"} vocal=${vocalLanguage} caption="${aceCaption}"`,
     );
+    // Same chain semantics as generate — repainting a slice of a voice-cloned
+    // song without the chain would leave an audible seam where the default
+    // vocal returns mid-track.
+    const readyVoice = await preflightVoiceChain(job.user_id, job.id);
     const paths = await runAceStep({
       task: "repaint",
       caption: aceCaption,
@@ -471,7 +858,9 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       endSec: p.endSec,
       vocalLanguageCode: toAceCode(vocalLanguage),
     });
-    const filenames = await processAudio(paths);
+    const filenames = readyVoice
+      ? await chainAceOutputs(paths, readyVoice, job.id)
+      : await processAudio(paths);
     const songs: JobSong[] = filenames.map((filename, i) => ({
       id: `${Date.now()}-${i}`,
       audioUrl: audioUrl(filename),
@@ -495,6 +884,7 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     `[job ${job.id}] lego genre=${genre?.category ?? "none"} ` +
     `vocal=${vocalLanguage} caption="${fullCaption}"`,
   );
+  const readyVoice = await preflightVoiceChain(job.user_id, job.id);
   const paths = await runAceStep({
     task: "lego",
     caption: fullCaption,
@@ -502,7 +892,9 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     source,
     vocalLanguageCode: toAceCode(vocalLanguage),
   });
-  const filenames = await processAudio(paths);
+  const filenames = readyVoice
+    ? await chainAceOutputs(paths, readyVoice, job.id)
+    : await processAudio(paths);
   const songs: JobSong[] = filenames.map((filename, i) => ({
     id: `${Date.now()}-${i}`,
     audioUrl: audioUrl(filename),
@@ -511,6 +903,10 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     ...(p.parentSongId && { parentSongId: p.parentSongId }),
   }));
   return { songs };
+}
+
+function isUsageActionKind(kind: JobKind): kind is UsageAction {
+  return kind === "generate" || kind === "repaint" || kind === "lego";
 }
 
 async function workerTick(): Promise<boolean> {
@@ -525,7 +921,13 @@ async function workerTick(): Promise<boolean> {
   try {
     const result = await runJob(claimed);
     await markDone(claimed.id, result);
-    if (claimed.user_id) await logUsage(claimed.user_id, claimed.kind);
+    // RVC kinds (rvc_train / rvc_infer) are out of scope for usage_log in
+    // Phase 1's commit A — they'll get their own quota wiring with the
+    // API endpoints in commit B/C. ACE-Step kinds keep the existing
+    // per-tier rolling-window counter.
+    if (claimed.user_id && isUsageActionKind(claimed.kind)) {
+      await logUsage(claimed.user_id, claimed.kind);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[job ${claimed.id}] failed:`, message);

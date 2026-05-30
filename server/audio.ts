@@ -67,6 +67,42 @@ export async function processAudio(containerPaths: string[]): Promise<string[]> 
   return watermarkedNames;
 }
 
+// Same as processAudio but the source is already a host-side file (e.g. the
+// RVC infer output already copied out of its container by rvc.ts, or the
+// YingMusic chain output from yingmusic.ts). Skips the docker cp and reads
+// the host file directly, then unlinks the temp source on success so we
+// don't accumulate orphan files.
+//
+// The host source may be wav (YingMusic) or mp3 (legacy). We re-encode via
+// ffmpeg into the .mp3-named clean file so the bytes match the extension —
+// `cp wav → x.mp3` would leave audio-secure serving WAV bytes labelled
+// audio/mpeg via /api/download. -q:a 2 is ~190 kbps VBR, transparent for
+// the chain's BigVGAN output.
+export async function processAudioFromHost(hostPaths: string[]): Promise<string[]> {
+  const watermarkedNames: string[] = [];
+  for (const hostPath of hostPaths) {
+    const stem = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const cleanPath = join(AUDIO_SECURE_DIR, `${stem}.mp3`);
+    const watermarkedPath = join(AUDIO_CACHE_DIR, `${stem}-wm.mp3`);
+    try {
+      await execFileAsync("ffmpeg", [
+        "-y", "-loglevel", "error",
+        "-i", hostPath,
+        "-codec:a", "libmp3lame", "-q:a", "2",
+        cleanPath,
+      ]);
+      await mixWatermark(cleanPath, watermarkedPath);
+      await fsp.unlink(hostPath).catch(() => {});
+      watermarkedNames.push(`${stem}-wm.mp3`);
+    } catch (err) {
+      await fsp.unlink(cleanPath).catch(() => {});
+      await fsp.unlink(watermarkedPath).catch(() => {});
+      throw err;
+    }
+  }
+  return watermarkedNames;
+}
+
 // Repaint/lego accept an audioUrl that points at /audio/...-wm.mp3. We feed
 // ACE-Step the matching clean file from audio-secure if it exists, otherwise
 // fall back to audio-cache (pre-watermark legacy songs). Validates the

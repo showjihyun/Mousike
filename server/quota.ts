@@ -28,6 +28,20 @@ const TIER_RULES: Record<string, TierRule> = {
   pro:     { windowMs: 24 * 60 * 60 * 1000,           limit: null, periodLabel: "무제한" },
 };
 
+// Voice-clone caps. Phase 2 (ADR 0006): Free + Starter can keep one
+// YingMusic reference voice; Pro keeps three on file. Anonymous callers
+// can't upload at all (no row to hang a user_voices.user_id on).
+const TIER_VOICE_CAPS: Record<string, number> = {
+  free:    1,
+  starter: 1,
+  pro:     3,
+};
+
+export function tierVoiceCap(tier: string | null): number {
+  if (tier === null) return 0;
+  return TIER_VOICE_CAPS[tier] ?? 0;
+}
+
 export async function readUsage(userId: string, tier: string): Promise<UsageState> {
   const rule = TIER_RULES[tier] ?? TIER_RULES.free;
   const windowStart = new Date(Date.now() - rule.windowMs).toISOString();

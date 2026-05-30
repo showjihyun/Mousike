@@ -31,6 +31,7 @@ import { SEED_GENERATIONS, makeGeneration } from "./data";
 import { CreatePage } from "./pages/CreatePage";
 import { HomePage } from "./pages/HomePage";
 import { LibraryPage } from "./pages/LibraryPage";
+import { VoicePage } from "./pages/VoicePage";
 import { loadAdvanced, loadCredits, loadGenerations, saveAdvanced, saveCredits, saveGenerations } from "./storage";
 import {
   DEFAULT_ADVANCED,
@@ -71,12 +72,16 @@ const LOADING_MESSAGES = [
 const TOAST_MS = 2200;
 const LOADING_MSG_INTERVAL_MS = 700;
 
-// Initial page from URL: /create → "create", everything else (including the
-// Toss /billing/* callbacks handled below) → "home". Keeps the state-based
-// page model intact while still letting users land directly on /create.
+// Initial page from URL: /create → "create", /voice → "voice", everything
+// else (including the Toss /billing/* callbacks handled below) → "home".
+// Keeps the state-based page model intact while still letting users land
+// directly on a deep route.
 function initialPage(): Page {
   if (typeof window === "undefined") return "home";
-  return window.location.pathname === "/create" ? "create" : "home";
+  const path = window.location.pathname;
+  if (path === "/create") return "create";
+  if (path === "/voice") return "voice";
+  return "home";
 }
 
 export function App() {
@@ -88,7 +93,7 @@ export function App() {
   // collapses to /.
   const setPage = useCallback((next: Page) => {
     setPageState(next);
-    const path = next === "create" ? "/create" : "/";
+    const path = next === "create" ? "/create" : next === "voice" ? "/voice" : "/";
     if (window.location.pathname !== path) {
       window.history.pushState({}, "", path);
     }
@@ -755,6 +760,13 @@ export function App() {
               onPause={handlePause}
               onAction={handleAction}
               onJumpToGen={handleJumpToGen}
+            />
+          )}
+          {page === "voice" && (
+            <VoicePage
+              user={user}
+              onRequireLogin={() => setLoginPromptReason("음성 클론은 로그인 후 사용할 수 있어요.")}
+              onShowToast={showToast}
             />
           )}
         </div>
