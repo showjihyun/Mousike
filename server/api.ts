@@ -406,9 +406,15 @@ export function mountApi(app: Express): void {
 
   app.post("/api/voice-samples", requireAuth, handleVoiceMulter, async (req, res) => {
     const u = req.user as AuthUser;
-    const displayName = String((req.body?.displayName as string | undefined) ?? "")
-      .trim()
-      .slice(0, 64);
+    // multer surfaces a repeated multipart field as string[], which String()
+    // would silently comma-join into a corrupted name. Reject anything that
+    // isn't a single scalar string.
+    const rawDisplayName = req.body?.displayName;
+    if (rawDisplayName !== undefined && typeof rawDisplayName !== "string") {
+      res.status(400).json({ error: "displayName must be a single string" });
+      return;
+    }
+    const displayName = (rawDisplayName ?? "").trim().slice(0, 64);
     if (!displayName) {
       res.status(400).json({ error: "displayName required" });
       return;

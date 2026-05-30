@@ -44,25 +44,41 @@ export function VoicePage({ user, onRequireLogin, onShowToast }: VoicePageProps)
       return;
     }
     let cancelled = false;
-    async function refresh(initial: boolean) {
+    (async () => {
       try {
         const list = await fetchVoices();
         if (!cancelled) setVoices(list);
       } catch (e) {
-        if (!cancelled && initial) {
+        if (!cancelled) {
           onShowToast(`보이스 목록 로드 실패: ${e instanceof Error ? e.message : ""}`);
         }
       } finally {
-        if (!cancelled && initial) setInitialLoading(false);
+        if (!cancelled) setInitialLoading(false);
       }
-    }
-    refresh(true);
-    const interval = window.setInterval(() => refresh(false), POLL_INTERVAL_MS);
+    })();
+    return () => { cancelled = true; };
+  }, [user, onShowToast]);
+
+  // Phase 2 voices land in a terminal state ('ready' or 'failed') the moment
+  // upload returns, so polling has nothing to observe most of the time. Only
+  // run the interval while a legacy RVC row is still 'uploading' or 'training'
+  // — the only states whose status changes asynchronously.
+  const hasPendingVoice = voices.some(
+    (v) => v.status === "uploading" || v.status === "training",
+  );
+  useEffect(() => {
+    if (!user || !hasPendingVoice) return;
+    let cancelled = false;
+    const interval = window.setInterval(() => {
+      void fetchVoices().then((list) => {
+        if (!cancelled) setVoices(list);
+      }).catch(() => { /* transient — next tick retries */ });
+    }, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [user, onShowToast]);
+  }, [user, hasPendingVoice]);
 
   const handleUploadSuccess = useCallback(
     (v: UserVoice) => {

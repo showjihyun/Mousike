@@ -14,6 +14,7 @@ import {
   countUsedPlusInFlight,
   recoverStaleRunning,
   startWorker,
+  sweepPendingTransients,
   GLOBAL_QUEUE_CAP,
   PER_USER_INFLIGHT_CAP,
   type GeneratePayload,
@@ -404,6 +405,8 @@ void (async () => {
   try {
     const stale = await recoverStaleRunning();
     if (stale > 0) console.log(`[jobs] cleared ${stale} stale running job(s) from prior process`);
+    const leaked = await sweepPendingTransients();
+    if (leaked > 0) console.log(`[jobs] swept ${leaked} orphan _pending-*.mp3 transient(s)`);
     startWorker();
   } catch (err) {
     console.warn("[jobs] worker disabled —", err instanceof Error ? err.message : err);

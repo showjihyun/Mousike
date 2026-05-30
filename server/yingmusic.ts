@@ -19,14 +19,15 @@ const RUNNER = "yingmusic-infer";
 const CHAIN_RUNNER = "yingmusic-chain";
 
 // Three host roots are bind-mounted into the yingmusic container — anything
-// we pass as source/target must live under one of them. Order matters:
-// most-specific first so a path under voice-samples/ doesn't accidentally
-// match a parent prefix. Mirrors docker-compose.yml `yingmusic.volumes`.
+// we pass as source/target must live under one of them. Sorted longest-host-
+// first at module init so toContainerPath's prefix match picks /data/_uploads
+// before /data even if the array literal is rewritten in source order.
+// Mirrors docker-compose.yml `yingmusic.volumes`.
 const VOICE_MOUNTS: Array<{ host: string; container: string }> = [
   { host: resolve(__dirname, "voice-samples"), container: "/data/_uploads" },
   { host: resolve(__dirname, "audio-secure"),  container: "/data/_aceout" },
   { host: resolve(__dirname, "..", "voice"),   container: "/data" },
-];
+].sort((a, b) => b.host.length - a.host.length);
 
 // YingMusic-SVC source dir on host (mounted at /app in container). The
 // inference script writes to <src>/outputs/<expname>/, which we read back.
@@ -38,11 +39,12 @@ const OUTPUTS_HOST_ROOT = join(YINGMUSIC_SRC, "outputs");
 // runaway hang.
 const INFER_TIMEOUT_MS = 10 * 60_000;
 // chain.sh adds a BR Separator pass (30-90s) before YingMusic; for a Pro
-// 3min source the whole chain is ~5-7min wall. 20min cap keeps us under the
-// worker's RUNNING_TTL_MS (15min) margin… wait — we DO need to stay below
-// jobs.ts:RUNNING_TTL_MS or the sweep will false-fail us. Keep this at 14min
-// so the abort fires first with a clear message instead of a silent sweep flip.
-const CHAIN_TIMEOUT_MS = 14 * 60_000;
+// 3min source the whole chain is ~5-7min wall. The chain is called AFTER
+// ACE-Step inside the same runJob, so the budget shared with ACE-Step (~3-4min
+// for Pro 3min songs) has to stay under jobs.ts:RUNNING_TTL_MS (15min) or the
+// sweep false-fails a legitimately-running job. 11min leaves a ~3-min cushion
+// for ACE-Step + watermark + slack.
+const CHAIN_TIMEOUT_MS = 11 * 60_000;
 
 export interface CloneOptions {
   // Path to the vocal we want to convert (e.g. an ACE-Step output stem).
@@ -183,6 +185,21 @@ function runRunner(runner: string, timeoutMs: number, env: Record<string, string
       else settle(() => reject(new Error(`yingmusic ${runner} exited code=${code}: ${stderrTail.slice(-400)}`)));
     });
   });
+}
+
+// Best-effort cleanup of the per-job intermediates left behind by chain.sh
+// and my_inference.py:
+//   <OUTPUTS_HOST_ROOT>/<expname>/        — YingMusic vc wav + accompany/<x>.wav
+//   <OUTPUTS_HOST_ROOT>/<expname>_sep/    — BR Separator input + output stems
+// Without this every voice-chained generate leaves ~60-120MB of wav on disk
+// forever. Errors are logged + swallowed — a stuck dir is a disk-usage issue,
+// not a correctness one, and we don't want to fail-the-job over GC.
+export async function cleanupChainOutputs(expname: string): Promise<void> {
+  for (const dir of [join(OUTPUTS_HOST_ROOT, expname), join(OUTPUTS_HOST_ROOT, `${expname}_sep`)]) {
+    await fsp.rm(dir, { recursive: true, force: true }).catch((e) => {
+      console.error(`[yingmusic] cleanup ${dir}:`, e instanceof Error ? e.message : e);
+    });
+  }
 }
 
 // Health check — for boot-time readiness + Phase-2 jobs.ts gating.

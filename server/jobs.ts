@@ -21,7 +21,7 @@ import { AUDIO_SECURE_DIR, prepareSourceForAceStep, processAudio, processAudioFr
 import { applyGenreTag, genreByCategory, resolveGenre, withQualitySuffix, type GenreCategory } from "./genre.js";
 import { logUsage, type UsageAction } from "./quota.js";
 import { inferOnBackingTrack, trainVoice } from "./rvc.js";
-import { cloneAndRemix, cloneOnto, pingYingMusic } from "./yingmusic.js";
+import { cleanupChainOutputs, cloneAndRemix, cloneOnto, pingYingMusic } from "./yingmusic.js";
 import { purgeVoiceSamples, resolveVoiceSamplePath } from "./voice-storage.js";
 
 const execFileAsync = promisify(execFile);
@@ -307,6 +307,26 @@ export async function countUsedPlusInFlight(
   return (logRes.count ?? 0) + (jobRes.count ?? 0);
 }
 
+// Boot-time sweep of orphaned chain-staging files. chainAceOutputs writes
+// each ACE-Step output as audio-secure/_pending-<jobId>-<i>.mp3 and unlinks
+// it in a finally block; a worker SIGKILL between the docker cp and the
+// finally leaks the transient indefinitely (AUDIO_SECURE_DIR has no other
+// janitor). One pass at boot keeps the dir from accreting them. Errors are
+// logged and swallowed — disk-usage, not correctness.
+export async function sweepPendingTransients(): Promise<number> {
+  try {
+    const entries = await fsp.readdir(AUDIO_SECURE_DIR);
+    const pending = entries.filter((f) => f.startsWith("_pending-"));
+    await Promise.all(
+      pending.map((f) => fsp.unlink(join(AUDIO_SECURE_DIR, f)).catch(() => {})),
+    );
+    return pending.length;
+  } catch (err) {
+    console.error("[jobs] sweepPendingTransients:", err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
 // Boot-time recovery: any 'running' row at startup belonged to the previous
 // process, which is now gone. Mark them failed so the polling client sees
 // a clear failure instead of waiting forever.
@@ -509,21 +529,43 @@ async function chainAceOutputs(
   const filenames: string[] = [];
   for (let i = 0; i < containerPaths.length; i++) {
     const containerPath = containerPaths[i];
+    const expname = `${jobId}-${i}`;
     const transient = join(AUDIO_SECURE_DIR, `_pending-${jobId}-${i}.mp3`);
     try {
       await execFileAsync("docker", ["cp", `ace-step:${containerPath}`, transient]);
       const chainOut = await cloneAndRemix({
         sourceHostPath: transient,
         targetHostPath,
-        expname: `${jobId}-${i}`,
+        expname,
       });
       const [filename] = await processAudioFromHost([chainOut]);
       filenames.push(filename);
     } finally {
       await fsp.unlink(transient).catch(() => {});
+      // GC YingMusic intermediates whether the chain succeeded or threw;
+      // a failed run still leaves the BR-separator stems on disk and
+      // there's no other janitor.
+      await cleanupChainOutputs(expname);
     }
   }
   return filenames;
+}
+
+// Pre-flight gate for ACE-Step branches (generate / repaint / lego): if the
+// user has a 'ready' voice, the post-ACE-Step chain WILL try to docker-exec
+// yingmusic. Probing the container BEFORE we burn ACE-Step time means a
+// stopped/unhealthy yingmusic fails the job in ~50ms instead of after a
+// 3-min ACE-Step run that gets discarded. Returns the voice to chain onto,
+// or null when the user has no voice (plain ACE-Step path).
+async function preflightVoiceChain(userId: string | null, jobId: string): Promise<ReadyVoice | null> {
+  if (!userId) return null;
+  const voice = await lookupReadyVoice(userId);
+  if (!voice) return null;
+  if (!(await pingYingMusic())) {
+    throw new Error("yingmusic worker unavailable — cannot apply user voice");
+  }
+  console.log(`[job ${jobId}] chain via voice=${voice.id}`);
+  return voice;
 }
 
 // Vocal-language auto rule (see CONTEXT.md). Pure: caller supplies the inputs.
@@ -605,6 +647,11 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       `lyrics=${lyricsOverride ? `${lyricsOverride.length}chars` : "none"} ` +
       `vocal=${vocalLanguage}(${p.vocalLanguage}) caption="${caption}"`,
     );
+    // Pre-flight: if user has a 'ready' voice but yingmusic is down, fail now
+    // instead of burning ACE-Step time and discarding the result. Failure
+    // propagates as a job failure — silent fallback to default vocal would
+    // surprise a user who explicitly asked for their voice.
+    const readyVoice = await preflightVoiceChain(job.user_id, job.id);
     const paths = await runAceStep({
       task: "text2music",
       caption,
@@ -614,16 +661,6 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       ...(keyOverride !== undefined && { key: keyOverride }),
       ...(lyricsOverride !== undefined && { lyrics: lyricsOverride }),
     });
-    // Auto-apply the user's voice via the BR-separate + YingMusic chain
-    // (ADR 0006). Anonymous callers and users without a 'ready' voice fall
-    // through to the plain ACE-Step path. Failure inside chainAceOutputs
-    // propagates as a job failure rather than silently falling back — the
-    // user explicitly asked for their voice and getting a default-vocal
-    // result instead would be confusing.
-    const readyVoice = job.user_id ? await lookupReadyVoice(job.user_id) : null;
-    if (readyVoice) {
-      console.log(`[job ${job.id}] generate chain via voice=${readyVoice.id}`);
-    }
     const filenames = readyVoice
       ? await chainAceOutputs(paths, readyVoice, job.id)
       : await processAudio(paths);
@@ -804,6 +841,10 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       `[job ${job.id}] repaint ${p.startSec}s–${p.endSec}s ` +
       `genre=${genre?.category ?? "none"} vocal=${vocalLanguage} caption="${aceCaption}"`,
     );
+    // Same chain semantics as generate — repainting a slice of a voice-cloned
+    // song without the chain would leave an audible seam where the default
+    // vocal returns mid-track.
+    const readyVoice = await preflightVoiceChain(job.user_id, job.id);
     const paths = await runAceStep({
       task: "repaint",
       caption: aceCaption,
@@ -813,7 +854,9 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       endSec: p.endSec,
       vocalLanguageCode: toAceCode(vocalLanguage),
     });
-    const filenames = await processAudio(paths);
+    const filenames = readyVoice
+      ? await chainAceOutputs(paths, readyVoice, job.id)
+      : await processAudio(paths);
     const songs: JobSong[] = filenames.map((filename, i) => ({
       id: `${Date.now()}-${i}`,
       audioUrl: audioUrl(filename),
@@ -837,6 +880,7 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     `[job ${job.id}] lego genre=${genre?.category ?? "none"} ` +
     `vocal=${vocalLanguage} caption="${fullCaption}"`,
   );
+  const readyVoice = await preflightVoiceChain(job.user_id, job.id);
   const paths = await runAceStep({
     task: "lego",
     caption: fullCaption,
@@ -844,7 +888,9 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     source,
     vocalLanguageCode: toAceCode(vocalLanguage),
   });
-  const filenames = await processAudio(paths);
+  const filenames = readyVoice
+    ? await chainAceOutputs(paths, readyVoice, job.id)
+    : await processAudio(paths);
   const songs: JobSong[] = filenames.map((filename, i) => ({
     id: `${Date.now()}-${i}`,
     audioUrl: audioUrl(filename),
