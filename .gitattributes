@@ -1,0 +1,11 @@
+# Shell scripts MUST be LF — they're consumed by bash inside Linux
+# containers via Docker COPY. autocrlf=true on Windows dev boxes
+# silently turns the shebang into `#!/bin/bash\r`, which the Linux
+# kernel then fails to exec ("no such file or directory" for the
+# interpreter, not the script). Enforce LF in the working tree.
+*.sh text eol=lf
+
+# Dockerfile + compose are read by Linux tooling — same risk.
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

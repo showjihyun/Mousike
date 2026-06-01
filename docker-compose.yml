@@ -93,16 +93,47 @@ services:
       # download YingMusic-SVC-full.pt into <src>/ckpt/ — see server/yingmusic/README.md.
       - ${YINGMUSIC_SRC:-../YingMusic-SVC}:/app
       # Mousike-side audio inputs. Three roots since uploads, curated test
-      # refs, and ACE-Step generation outputs live in different host trees:
-      #   /data            → ./voice                  (curated test refs in voice/sample/)
-      #   /data/_uploads   → ./server/voice-samples   (per-user voice refs)
-      #   /data/_aceout    → ./server/audio-secure    (clean ACE-Step output, chain source)
+      # refs, and ACE-Step generation outputs live in different host trees.
+      # Targets are top-level (NOT nested under /data) because Docker can't
+      # mkdir subdir mount targets inside a read-only parent mount:
+      #   /data       → ./voice                  (curated test refs in voice/sample/)
+      #   /uploads    → ./server/voice-samples   (per-user voice refs)
+      #   /aceout     → ./server/audio-secure    (clean ACE-Step output, chain source)
       # yingmusic.ts:toContainerPath translates host paths under any root.
       - ./voice:/data:ro
-      - ./server/voice-samples:/data/_uploads:ro
-      - ./server/audio-secure:/data/_aceout:ro
+      - ./server/voice-samples:/uploads:ro
+      - ./server/audio-secure:/aceout:ro
       # Persistent HF / Torch hub cache so BigVGAN + Whisper survive container
       # recreates (otherwise re-downloaded on every cold start).
       - ./server/yingmusic-cache:/cache
     restart: unless-stopped
+
+  # Phase D (Plan C): DiffRhythm for Korean song generation. Replaces ACE-Step
+  # for KO lyrics. ACE-Step can't reliably sing Korean phonemes even after all
+  # tuning (mm4 patch, DiT 7.0, LM 0.5, romaja preprocessing); DiffRhythm has
+  # a built-in Korean g2p path (hangul → IPA via espeak-ng). Source repo
+  # cloned outside Mousike — set DIFFRHYTHM_SRC in .env to override.
+  diffrhythm:
+    build:
+      context: ./server/diffrhythm
+      dockerfile: Dockerfile
+    image: mousike-diffrhythm:latest
+    container_name: diffrhythm
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      # DiffRhythm source (lives outside this repo — see README).
+      #   git clone https://github.com/ASLP-lab/DiffRhythm to DIFFRHYTHM_SRC
+      - ${DIFFRHYTHM_SRC:-../DiffRhythm}:/app
+      # Lyric LRCs are written here by server/diffrhythm.ts before each call;
+      # outputs land at /app/outputs/<expname>/output_*.wav which the host
+      # reads via the bind on /app (DIFFRHYTHM_SRC/outputs/).
+      - ./server/diffrhythm-cache:/cache
+    restart: unless-stopped
+
 

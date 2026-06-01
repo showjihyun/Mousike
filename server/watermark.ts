@@ -58,8 +58,12 @@ export async function mixWatermark(cleanPath: string, outPath: string): Promise<
       "-i", cleanPath,
       "-i", WATERMARK_PATH,
       "-filter_complex", filter,
+      // 320k CBR is the libmp3lame ceiling — the watermark mix is the LAST
+      // lossy pass before users hear the song, so leave as much headroom as
+      // mp3 allows. File size grows ~67% vs 192k (still a few MB per 3min
+      // song) and bandwidth is negligible at this scale.
       "-c:a", "libmp3lame",
-      "-b:a", "192k",
+      "-b:a", "320k",
       outPath,
     ],
     { timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL" },

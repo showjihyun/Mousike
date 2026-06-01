@@ -17,11 +17,12 @@ import { join } from "path";
 import { getSupabase } from "./db.js";
 import { translateKoreanToEnglish } from "./ollama.js";
 import { runAceStep } from "./acestep.js";
-import { AUDIO_SECURE_DIR, prepareSourceForAceStep, processAudio, processAudioFromHost } from "./audio.js";
+import { AUDIO_SECURE_DIR, prepareSourceForAceStep, processAudio, processAudioFromHost, processAudioWithTtsOverlay } from "./audio.js";
 import { applyGenreTag, genreByCategory, resolveGenre, withQualitySuffix, type GenreCategory } from "./genre.js";
 import { logUsage, type UsageAction } from "./quota.js";
 import { inferOnBackingTrack, trainVoice } from "./rvc.js";
 import { cleanupChainOutputs, cloneAndRemix, cloneOnto, pingYingMusic } from "./yingmusic.js";
+import { synthesizeKoreanTts } from "./tts.js";
 import { purgeVoiceSamples, resolveVoiceSamplePath } from "./voice-storage.js";
 
 const execFileAsync = promisify(execFile);
@@ -146,11 +147,11 @@ export const PER_USER_INFLIGHT_CAP = 2;
 // row, post-boot recovery missed it) both eventually fill the global cap and
 // 503 honest traffic. Sweep flips them to failed.
 const QUEUED_TTL_MS = 60 * 60_000;     // 1h — generous for a popular slot
-// 20min covers worst-case Pro 3min generate (~4-6min ACE-Step) plus the
-// YingMusic auto-chain (~5-11min wall — yingmusic.ts:CHAIN_TIMEOUT_MS is
-// 11min) plus watermark + slack. Was 15min pre-Phase-2 when generate didn't
-// route through the chain; that budget false-failed Pro chain runs.
-const RUNNING_TTL_MS = 20 * 60_000;
+// 26min covers worst-case Pro 3min generate (~4-6min ACE-Step) plus the
+// YingMusic auto-chain at 200 diffusion steps (~10-18min wall —
+// yingmusic.ts:CHAIN_TIMEOUT_MS is 18min) plus watermark + slack. Bumped
+// from 20min after audit fix C doubled chain steps for phoneme clarity.
+const RUNNING_TTL_MS = 26 * 60_000;
 // rvc_train runs ~15-25min (ADR 0005); rvc.ts caps the docker-exec runner
 // at 60min, so the sweep is a backstop just past that — NOT the 20min above,
 // which would false-fail every legitimate training job.
@@ -311,20 +312,22 @@ export async function countUsedPlusInFlight(
   return (logRes.count ?? 0) + (jobRes.count ?? 0);
 }
 
-// Boot-time sweep of orphaned chain-staging files. chainAceOutputs writes
-// each ACE-Step output as audio-secure/_pending-<jobId>-<i>.mp3 and unlinks
-// it in a finally block; a worker SIGKILL between the docker cp and the
-// finally leaks the transient indefinitely (AUDIO_SECURE_DIR has no other
-// janitor). One pass at boot keeps the dir from accreting them. Errors are
-// logged and swallowed — disk-usage, not correctness.
+// Boot-time sweep of orphaned chain-staging files. Two prefixes:
+//   _pending-<jobId>-<i>.wav  — chainAceOutputs source for cloneAndRemix
+//   _staging-<stem>.wav       — processAudio's ace-step wav before transcode
+// Both are unlinked in their function's finally block; a worker SIGKILL
+// between the docker cp and the finally leaks the transient indefinitely
+// (AUDIO_SECURE_DIR has no other janitor). One pass at boot keeps the dir
+// from accreting them. Errors are logged and swallowed — disk-usage, not
+// correctness.
 export async function sweepPendingTransients(): Promise<number> {
   try {
     const entries = await fsp.readdir(AUDIO_SECURE_DIR);
-    const pending = entries.filter((f) => f.startsWith("_pending-"));
+    const stale = entries.filter((f) => f.startsWith("_pending-") || f.startsWith("_staging-"));
     await Promise.all(
-      pending.map((f) => fsp.unlink(join(AUDIO_SECURE_DIR, f)).catch(() => {})),
+      stale.map((f) => fsp.unlink(join(AUDIO_SECURE_DIR, f)).catch(() => {})),
     );
-    return pending.length;
+    return stale.length;
   } catch (err) {
     console.error("[jobs] sweepPendingTransients:", err instanceof Error ? err.message : err);
     return 0;
@@ -534,7 +537,10 @@ async function chainAceOutputs(
   for (let i = 0; i < containerPaths.length; i++) {
     const containerPath = containerPaths[i];
     const expname = `${jobId}-${i}`;
-    const transient = join(AUDIO_SECURE_DIR, `_pending-${jobId}-${i}.mp3`);
+    // ACE-Step now emits flac (acestep.ts param 26 — the only lossless
+    // option ACE-Step exposes); keep the transient extension honest so
+    // chain.sh's cp + librosa loader don't have to sniff encoding.
+    const transient = join(AUDIO_SECURE_DIR, `_pending-${jobId}-${i}.flac`);
     try {
       await execFileAsync("docker", ["cp", `ace-step:${containerPath}`, transient]);
       const chainOut = await cloneAndRemix({
@@ -561,8 +567,25 @@ async function chainAceOutputs(
 // stopped/unhealthy yingmusic fails the job in ~50ms instead of after a
 // 3-min ACE-Step run that gets discarded. Returns the voice to chain onto,
 // or null when the user has no voice (plain ACE-Step path).
-async function preflightVoiceChain(userId: string | null, jobId: string): Promise<ReadyVoice | null> {
+//
+// Korean override: YingMusic-SVC's Whisper-small semantic encoder + CN/EN-
+// biased flow-matching diffusion don't preserve Korean phonemes — empirically
+// the cloned vocal becomes unintelligible (or silent) for KO source even
+// after the mm4.py octave-snap fix and diffusion-step increase. For KO we
+// skip the chain entirely and serve the plain ACE-Step output, which sings
+// recognisable Korean via the auto-romaja preprocessor. Voice cloning for
+// KO returns in Plan B when a Korean-capable cloner ships (RVC+KLM hybrid
+// or a JP-OSS substitute — JP/KR share ~60% phoneme inventory).
+async function preflightVoiceChain(
+  userId: string | null,
+  jobId: string,
+  vocalLanguage: VocalLanguageResolved,
+): Promise<ReadyVoice | null> {
   if (!userId) return null;
+  if (vocalLanguage === "KO") {
+    console.log(`[job ${jobId}] KO detected → skip voice chain (YingMusic SVC can't preserve Korean phonemes)`);
+    return null;
+  }
   const voice = await lookupReadyVoice(userId);
   if (!voice) return null;
   if (!(await pingYingMusic())) {
@@ -651,11 +674,48 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
       `lyrics=${lyricsOverride ? `${lyricsOverride.length}chars` : "none"} ` +
       `vocal=${vocalLanguage}(${p.vocalLanguage}) caption="${caption}"`,
     );
+    // KO TTS path (Plan Y-1): ACE-Step's vocal model can't reliably sing
+    // Korean (extensively tested 2026-05/06). When the user supplies KO
+    // lyrics, we (a) ask ACE-Step for an INSTRUMENTAL (skip its lyrics
+    // slot) and (b) overlay edge-tts ko-KR speech onto it. Spoken-word
+    // aesthetic, but Korean is reliably intelligible. Voice clone for KO
+    // is deferred to Y-2 (RVC+KLM background training).
+    const useKoTtsPath = vocalLanguage === "KO" && lyricsOverride !== undefined;
+    if (useKoTtsPath) {
+      console.log(`[job ${job.id}] KO TTS path: ACE-Step instrumental + edge-tts ko-KR overlay`);
+      const ttsPath = join(AUDIO_SECURE_DIR, `_tts-${job.id}.mp3`);
+      try {
+        const [paths] = await Promise.all([
+          runAceStep({
+            task: "text2music",
+            caption: `${caption}, instrumental, no vocals`,
+            durationSec: p.durationSec,
+            vocalLanguageCode: "unknown",
+            ...(bpmOverride !== undefined && { bpm: bpmOverride }),
+            ...(keyOverride !== undefined && { key: keyOverride }),
+            // Intentionally NO lyrics — instrumental mode.
+          }),
+          synthesizeKoreanTts(lyricsOverride, ttsPath),
+        ]);
+        const filenames = await processAudioWithTtsOverlay(paths, ttsPath);
+        const songs: JobSong[] = filenames.map((filename, i) => ({
+          id: `${Date.now()}-${i}`,
+          audioUrl: audioUrl(filename),
+          prompt: p.prompt,
+          vocalLanguage,
+          ...(translatedCaption !== undefined && { translatedCaption }),
+        }));
+        return { songs };
+      } finally {
+        await fsp.unlink(ttsPath).catch(() => {});
+      }
+    }
+
     // Pre-flight: if user has a 'ready' voice but yingmusic is down, fail now
     // instead of burning ACE-Step time and discarding the result. Failure
     // propagates as a job failure — silent fallback to default vocal would
     // surprise a user who explicitly asked for their voice.
-    const readyVoice = await preflightVoiceChain(job.user_id, job.id);
+    const readyVoice = await preflightVoiceChain(job.user_id, job.id, vocalLanguage);
     const paths = await runAceStep({
       task: "text2music",
       caption,
@@ -848,7 +908,7 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     // Same chain semantics as generate — repainting a slice of a voice-cloned
     // song without the chain would leave an audible seam where the default
     // vocal returns mid-track.
-    const readyVoice = await preflightVoiceChain(job.user_id, job.id);
+    const readyVoice = await preflightVoiceChain(job.user_id, job.id, vocalLanguage);
     const paths = await runAceStep({
       task: "repaint",
       caption: aceCaption,
@@ -884,7 +944,7 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     `[job ${job.id}] lego genre=${genre?.category ?? "none"} ` +
     `vocal=${vocalLanguage} caption="${fullCaption}"`,
   );
-  const readyVoice = await preflightVoiceChain(job.user_id, job.id);
+  const readyVoice = await preflightVoiceChain(job.user_id, job.id, vocalLanguage);
   const paths = await runAceStep({
     task: "lego",
     caption: fullCaption,
