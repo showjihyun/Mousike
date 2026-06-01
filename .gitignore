@@ -49,3 +49,15 @@ server/voice-rvc-mute/**/*.spec.pt
 # this repo — see server/yingmusic/README.md. HF/torch cache survives container
 # recreates but is rebuilt on demand.
 server/yingmusic-cache/
+
+# Phase D / Plan C experimental caches — DiffRhythm + YuEGP smoke-tested for
+# Korean song-gen, both failed (ADR 0007). Source repos + caches stay on
+# operator's disk for possible re-evaluation; never committed.
+server/diffrhythm-cache/
+server/yue-cache/
+server/diffrhythm-outputs/
+
+# Test artifacts from local CLI verification (curl cookie jars, scratch dirs)
+cookies.txt
+server/cookies.txt
+dev/

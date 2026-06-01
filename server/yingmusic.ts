@@ -19,13 +19,14 @@ const RUNNER = "yingmusic-infer";
 const CHAIN_RUNNER = "yingmusic-chain";
 
 // Three host roots are bind-mounted into the yingmusic container — anything
-// we pass as source/target must live under one of them. Sorted longest-host-
-// first at module init so toContainerPath's prefix match picks /data/_uploads
-// before /data even if the array literal is rewritten in source order.
-// Mirrors docker-compose.yml `yingmusic.volumes`.
+// we pass as source/target must live under one of them. Container paths are
+// top-level (not nested under /data) because Docker can't mkdir a subdir
+// mount target inside the read-only /data parent. Sorted longest-host-first
+// at module init for prefix-match determinism. Mirrors docker-compose.yml
+// `yingmusic.volumes`.
 const VOICE_MOUNTS: Array<{ host: string; container: string }> = [
-  { host: resolve(__dirname, "voice-samples"), container: "/data/_uploads" },
-  { host: resolve(__dirname, "audio-secure"),  container: "/data/_aceout" },
+  { host: resolve(__dirname, "voice-samples"), container: "/uploads" },
+  { host: resolve(__dirname, "audio-secure"),  container: "/aceout" },
   { host: resolve(__dirname, "..", "voice"),   container: "/data" },
 ].sort((a, b) => b.host.length - a.host.length);
 
@@ -38,14 +39,14 @@ const OUTPUTS_HOST_ROOT = join(YINGMUSIC_SRC, "outputs");
 // 10min cap leaves room for batch / very long inputs without obscuring a
 // runaway hang.
 const INFER_TIMEOUT_MS = 10 * 60_000;
-// chain.sh adds a BR Separator pass (30-90s) before YingMusic; for a Pro
-// 3min source the whole chain is ~5-11min wall. The chain runs AFTER
-// ACE-Step inside the same runJob, so the shared budget with ACE-Step
-// (~4-6min on a 4070 SUPER for Pro 3min songs) has to stay under
-// jobs.ts:RUNNING_TTL_MS (now 20min, bumped from 15min to accommodate this).
-// 11min here leaves ~4min headroom over ACE-Step's worst case before the
-// sweep can race.
-const CHAIN_TIMEOUT_MS = 11 * 60_000;
+// chain.sh adds a BR Separator pass (30-90s) before YingMusic. With audit
+// fix C raising default diffusion steps from 100 → 200, RTF roughly
+// doubles: for a Pro 3min song the chain is now ~10-15min wall. The chain
+// runs AFTER ACE-Step inside the same runJob, so the shared budget with
+// ACE-Step (~4-6min on a 4070 SUPER for Pro 3min songs) has to stay under
+// jobs.ts:RUNNING_TTL_MS (bumped to 26min). 18min here leaves a small
+// cushion over ACE-Step's worst case before the sweep can race.
+const CHAIN_TIMEOUT_MS = 18 * 60_000;
 
 export interface CloneOptions {
   // Path to the vocal we want to convert (e.g. an ACE-Step output stem).
@@ -116,9 +117,13 @@ export async function cloneAndRemix(opts: CloneOptions): Promise<string> {
 
   const source = toContainerPath(opts.sourceHostPath);
   const target = toContainerPath(opts.targetHostPath);
-  const steps = String(opts.steps ?? 100);
+  // Mousike audit fix C: 200 diffusion steps for the chain path (vs 100 for
+  // the single-clone path) — sharper formants help phoneme intelligibility
+  // for non-English source vocals at the cost of ~2x wall time per chain
+  // step. CHAIN_TIMEOUT_MS + RUNNING_TTL_MS bumped to absorb the new budget.
+  const steps = String(opts.steps ?? 200);
 
-  console.log(`[yingmusic] cloneAndRemix ${opts.expname}: ${source} → target ${target}`);
+  console.log(`[yingmusic] cloneAndRemix ${opts.expname}: ${source} → target ${target}, steps=${steps}`);
   await runRunner(CHAIN_RUNNER, CHAIN_TIMEOUT_MS, { SOURCE: source, TARGET: target, EXPNAME: opts.expname, STEPS: steps });
 
   // chain.sh writes the final remix to /app/outputs/<expname>/accompany/<x>.wav.

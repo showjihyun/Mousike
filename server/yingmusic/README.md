@@ -53,11 +53,13 @@ chain pipeline fails with `FileNotFoundError` from `accom_separation/inference.p
 $brDest = "C:\WorkSpace\YingMusic-SVC\accom_separation\ckpt\bs_roformer"
 New-Item -ItemType Directory -Force -Path $brDest | Out-Null
 curl.exe -L -o "$brDest\bs_roformer.ckpt" `
-  "https://huggingface.co/GiantAILab/YingMusic-SVC/resolve/main/accom_separation/bs_roformer.ckpt"
+  "https://huggingface.co/GiantAILab/YingMusic-SVC/resolve/main/bs_roformer.ckpt"
 ```
 
-(If the upstream URL moves, see the upstream `accom_separation/README.MD`.)
-The `config_bd_roformer.yaml` ships in-repo; only the `.ckpt` is missing.
+The checkpoint sits at the HF repo root next to `YingMusic-SVC-full.pt`
+(NOT under any `accom_separation/` subpath, despite where it ends up
+locally). `config_bd_roformer.yaml` ships in-repo; only the `.ckpt` is
+missing.
 
 ### 3. Build + start the service
 

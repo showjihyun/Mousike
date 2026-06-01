@@ -37,9 +37,12 @@ echo "=== target: ${TARGET}"
 
 # Step 1: stage the source into a flat dir BR Separator can scan.
 # inference.py globs args.input_folder/*.* — we give it exactly one file
-# so the output dir is deterministic at <store_dir>/mix/.
+# so the output dir is deterministic at <store_dir>/mix/. Preserve the
+# source extension (now flac from ACE-Step, was mp3 historically) so
+# librosa's content-sniffer doesn't have to decide based on a lying name.
 mkdir -p "${SEP_IN}"
-cp "${SOURCE}" "${SEP_IN}/mix.wav"
+SRC_EXT="${SOURCE##*.}"
+cp "${SOURCE}" "${SEP_IN}/mix.${SRC_EXT}"
 
 echo "=== br-separator running"
 cd /app/accom_separation
