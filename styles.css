@@ -2298,6 +2298,12 @@ input, textarea {
   color: #c0392b;
   margin-top: 4px;
 }
+.voice-status-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-end;
+}
 .voice-status {
   font-size: 11px;
   font-weight: 600;

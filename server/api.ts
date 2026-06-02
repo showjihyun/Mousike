@@ -7,7 +7,8 @@ import { join } from "path";
 import multer from "multer";
 import { getSupabase } from "./db.js";
 import { requireAuth, type AuthUser } from "./auth.js";
-import { readUsage, tierVoiceCap } from "./quota.js";
+import { enqueue } from "./jobs.js";
+import { readUsage, tierRvcTrainEpochs, tierVoiceCap } from "./quota.js";
 import { renderCert } from "./cert.js";
 import { AUDIO_CACHE_DIR, AUDIO_SECURE_DIR, fileExists } from "./audio.js";
 import {
@@ -480,9 +481,9 @@ export function mountApi(app: Express): void {
         return;
       }
 
-      // Zero-shot: the upload IS the voice. No training step, no
-      // weight/index artifacts to pair — status goes straight to 'ready'.
-      // epochs left NULL (column is nullable since migration 010).
+      // YingMusic readiness: status='ready' immediately. RVC lifecycle is
+      // separate (rvc_status, see migration 011 + ADR 0007). epochs left
+      // NULL — column is nullable since migration 010.
       const { error: insErr } = await sb.from("user_voices").insert({
         id: voiceId,
         user_id: u.id,
@@ -495,6 +496,24 @@ export function mountApi(app: Express): void {
         await purgeVoiceSamples(u.id, voiceId);
         throw insErr;
       }
+
+      // Phase D Y-2: kick off background RVC training so the KO TTS path
+      // (which can't use YingMusic SVC — see ADR 0007) can apply the user's
+      // voice timbre once the .pth + .index land (~15-25 min). Best-effort
+      // — a failed enqueue logs and skips; YingMusic and the spoken-word KO
+      // path keep working with the default SunHi voice.
+      try {
+        await enqueue(u.id, "rvc_train", {
+          voiceId,
+          epochs: tierRvcTrainEpochs(u.tier),
+        });
+      } catch (rvcEnqueueErr) {
+        console.error(
+          "[voice-samples] background rvc_train enqueue failed:",
+          rvcEnqueueErr instanceof Error ? rvcEnqueueErr.message : rvcEnqueueErr,
+        );
+      }
+
       res.status(201).json({
         voiceId,
         sampleSeconds: Math.round(totalSec),
@@ -512,7 +531,7 @@ export function mountApi(app: Express): void {
       const { data, error } = await sb
         .from("user_voices")
         .select(
-          "id, display_name, sample_seconds, status, error, created_at, trained_at",
+          "id, display_name, sample_seconds, status, rvc_status, error, created_at, trained_at",
         )
         .eq("user_id", userId(req))
         .order("created_at", { ascending: false });
@@ -534,7 +553,7 @@ export function mountApi(app: Express): void {
       const { data, error } = await sb
         .from("user_voices")
         .select(
-          "id, display_name, sample_seconds, status, error, created_at, trained_at",
+          "id, display_name, sample_seconds, status, rvc_status, error, created_at, trained_at",
         )
         .eq("id", vid)
         .eq("user_id", userId(req))

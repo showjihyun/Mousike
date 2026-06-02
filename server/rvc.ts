@@ -24,7 +24,7 @@
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { promises as fsp } from "fs";
-import { basename, posix as pposix, relative as pathRelative, sep as pathSep } from "path";
+import { basename, extname, join, posix as pposix, relative as pathRelative, sep as pathSep } from "path";
 import {
   DEMO_BACKING_FILE,
   VOICE_MODELS_DIR,
@@ -339,6 +339,66 @@ function runInfer(args: Record<string, unknown>): Promise<void> {
       else settle(() => reject(new Error(`vc_infer.py exited code=${code}: ${stderrTail.slice(-400)}`)));
     });
   });
+}
+
+// Phase D Y-2: arbitrary-input inference. inferOnBackingTrack runs VC over
+// the canned demo wav; this variant accepts any host audio file (in
+// practice, the TTS output for the KO TTS path) and stages it through the
+// voice-train-logs bind mount so the in-container vc_infer.py can read it.
+//
+// Output lands in the same logs/ dir, host path returned. Caller owns the
+// returned wav and is responsible for unlinking it.
+export interface InferOnAudioOptions {
+  weightPath: string;
+  indexPath: string;
+  inputHostPath: string;
+}
+
+export async function inferOnAudio(opts: InferOnAudioOptions): Promise<string> {
+  await fsp.access(opts.inputHostPath);
+
+  const weightRel = pathRelative(VOICE_MODELS_DIR, opts.weightPath).split(pathSep).join("/");
+  const indexContainer = pposix.join(
+    MOUNT_WEIGHTS,
+    pathRelative(VOICE_MODELS_DIR, opts.indexPath).split(pathSep).join("/"),
+  );
+
+  // Stage the input audio into VOICE_TRAIN_LOGS_DIR (bind-mounted to
+  // /app/logs in the rvc container). RVC's other expected input mounts
+  // (/app/dataset for training samples, /app/backing for demo wav) aren't
+  // a clean fit for transient per-call audio; logs/ already roundtrips
+  // outputs back to the host, so input + output sharing it is symmetric.
+  const tag = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const ext = extname(opts.inputHostPath) || ".wav";
+  const stagedName = `_input-${tag}${ext}`;
+  const stagedHost = join(VOICE_TRAIN_LOGS_DIR, stagedName);
+  const stagedContainer = pposix.join(MOUNT_LOGS, stagedName);
+
+  const outName = `_clone-${tag}.wav`;
+  const outContainer = pposix.join(MOUNT_LOGS, outName);
+  const outHost = join(VOICE_TRAIN_LOGS_DIR, outName);
+
+  await fsp.copyFile(opts.inputHostPath, stagedHost);
+  try {
+    console.log(`[rvc] infer-on-audio begin: ${weightRel} on ${basename(opts.inputHostPath)}`);
+    await runInfer({
+      weight_rel: weightRel,
+      index_path: indexContainer,
+      input_path: stagedContainer,
+      output_path: outContainer,
+      transpose: 0,
+      f0_method: "rmvpe",
+      index_rate: 0.75,
+      filter_radius: 3,
+      resample_sr: 0,
+      rms_mix_rate: 0.25,
+      protect: 0.33,
+    });
+    await fsp.access(outHost);
+    return outHost;
+  } finally {
+    await fsp.unlink(stagedHost).catch(() => {});
+  }
 }
 
 export async function pingRvc(): Promise<boolean> {

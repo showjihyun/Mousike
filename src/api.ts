@@ -268,12 +268,17 @@ export async function lego(args: {
 // migration; nothing the FE writes will ever produce them.
 
 export type VoiceStatus = "uploading" | "training" | "trained" | "ready" | "failed";
+// Phase D Y-2: RVC training runs in the background after upload so the KO
+// TTS path can apply the user's voice timbre. Independent of VoiceStatus
+// (which tracks YingMusic readiness).
+export type VoiceRvcStatus = "idle" | "training" | "trained" | "failed";
 
 export interface UserVoice {
   id: string;
   displayName: string;
   sampleSeconds: number | null;
   status: VoiceStatus;
+  rvcStatus: VoiceRvcStatus;
   error: string | null;
   createdAt: string;
   trainedAt: string | null;
@@ -287,6 +292,7 @@ interface RawUserVoice {
   display_name: string;
   sample_seconds: number | null;
   status: VoiceStatus;
+  rvc_status: VoiceRvcStatus;
   error: string | null;
   created_at: string;
   trained_at: string | null;
@@ -298,6 +304,7 @@ function toUserVoice(r: RawUserVoice): UserVoice {
     displayName: r.display_name,
     sampleSeconds: r.sample_seconds,
     status: r.status,
+    rvcStatus: r.rvc_status ?? "idle",
     error: r.error,
     createdAt: r.created_at,
     trainedAt: r.trained_at,
@@ -371,6 +378,10 @@ export async function uploadVoiceSamples(
     displayName,
     sampleSeconds: data.sampleSeconds,
     status: data.status,
+    // Server enqueues rvc_train in the background on upload; the new row
+    // starts at rvc_status='idle' and the FE poll will surface 'training'
+    // → 'trained' transitions as they happen.
+    rvcStatus: "idle",
     error: null,
     createdAt: new Date().toISOString(),
     trainedAt: null,
