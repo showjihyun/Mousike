@@ -42,6 +42,22 @@ export function tierVoiceCap(tier: string | null): number {
   return TIER_VOICE_CAPS[tier] ?? 0;
 }
 
+// Phase D Y-2: RVC+KLM background training epochs per tier. Fewer epochs =
+// faster wall-clock (~10min at 100ep vs ~25min at 250ep on a 4070 SUPER)
+// at the cost of fidelity. Free's 100ep is the "beta — quick + rough"
+// tradeoff; Pro's 250ep is the production target. Triggered automatically
+// from POST /api/voice-samples — the user doesn't pick this.
+const TIER_RVC_TRAIN_EPOCHS: Record<string, number> = {
+  free:    100,
+  starter: 200,
+  pro:     250,
+};
+
+export function tierRvcTrainEpochs(tier: string | null): number {
+  if (tier === null) return 0;
+  return TIER_RVC_TRAIN_EPOCHS[tier] ?? TIER_RVC_TRAIN_EPOCHS.free;
+}
+
 export async function readUsage(userId: string, tier: string): Promise<UsageState> {
   const rule = TIER_RULES[tier] ?? TIER_RULES.free;
   const windowStart = new Date(Date.now() - rule.windowMs).toISOString();

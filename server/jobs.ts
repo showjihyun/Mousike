@@ -20,10 +20,10 @@ import { runAceStep } from "./acestep.js";
 import { AUDIO_SECURE_DIR, prepareSourceForAceStep, processAudio, processAudioFromHost, processAudioWithTtsOverlay } from "./audio.js";
 import { applyGenreTag, genreByCategory, resolveGenre, withQualitySuffix, type GenreCategory } from "./genre.js";
 import { logUsage, type UsageAction } from "./quota.js";
-import { inferOnBackingTrack, trainVoice } from "./rvc.js";
+import { inferOnAudio, inferOnBackingTrack, trainVoice } from "./rvc.js";
 import { cleanupChainOutputs, cloneAndRemix, cloneOnto, pingYingMusic } from "./yingmusic.js";
 import { synthesizeKoreanTts } from "./tts.js";
-import { purgeVoiceSamples, resolveVoiceSamplePath } from "./voice-storage.js";
+import { resolveVoiceSamplePath } from "./voice-storage.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -489,6 +489,41 @@ interface ReadyVoice {
   id: string;
   sample_paths: string[];
 }
+
+// Phase D Y-2: trained RVC voice for the KO TTS path. Separate from
+// ReadyVoice because the rvc_status='trained' invariant guarantees the
+// weight + index paths are non-null (paired-artifacts CHECK, migration
+// 011). Errors degrade to null so KO songs still ship with the default
+// SunHi voice when RVC training hasn't completed (~15-25 min after upload).
+interface TrainedRvcVoice {
+  id: string;
+  weight_path: string;
+  index_path: string;
+}
+async function lookupTrainedRvcVoice(userId: string): Promise<TrainedRvcVoice | null> {
+  try {
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from("user_voices")
+      .select("id, weight_path, index_path")
+      .eq("user_id", userId)
+      .eq("rvc_status", "trained")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.error(`[jobs] lookupTrainedRvcVoice(${userId}):`, error.message);
+      return null;
+    }
+    if (!data) return null;
+    const row = data as { id: string; weight_path: string | null; index_path: string | null };
+    if (!row.weight_path || !row.index_path) return null;
+    return { id: row.id, weight_path: row.weight_path, index_path: row.index_path };
+  } catch (e) {
+    console.error(`[jobs] lookupTrainedRvcVoice(${userId}):`, e instanceof Error ? e.message : e);
+    return null;
+  }
+}
 async function lookupReadyVoice(userId: string): Promise<ReadyVoice | null> {
   try {
     const sb = getSupabase();
@@ -682,10 +717,19 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     // is deferred to Y-2 (RVC+KLM background training).
     const useKoTtsPath = vocalLanguage === "KO" && lyricsOverride !== undefined;
     if (useKoTtsPath) {
+      // Optional RVC voice timbre on top of the spoken-word TTS (Plan Y-2,
+      // ADR 0007). Lookup runs in parallel with ACE-Step + TTS; if the
+      // user has a trained RVC voice we route the TTS audio through it
+      // before the mix, otherwise the default ko-KR SunHi voice rides
+      // straight to the overlay.
+      const rvcLookup = job.user_id
+        ? lookupTrainedRvcVoice(job.user_id)
+        : Promise.resolve(null);
       console.log(`[job ${job.id}] KO TTS path: ACE-Step instrumental + edge-tts ko-KR overlay`);
       const ttsPath = join(AUDIO_SECURE_DIR, `_tts-${job.id}.mp3`);
+      let clonedTtsPath: string | null = null;
       try {
-        const [paths] = await Promise.all([
+        const [paths, , rvcVoice] = await Promise.all([
           runAceStep({
             task: "text2music",
             caption: `${caption}, instrumental, no vocals`,
@@ -696,8 +740,19 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
             // Intentionally NO lyrics — instrumental mode.
           }),
           synthesizeKoreanTts(lyricsOverride, ttsPath),
+          rvcLookup,
         ]);
-        const filenames = await processAudioWithTtsOverlay(paths, ttsPath);
+        let voiceTtsPath = ttsPath;
+        if (rvcVoice) {
+          console.log(`[job ${job.id}] KO TTS + RVC: applying voice=${rvcVoice.id} timbre`);
+          clonedTtsPath = await inferOnAudio({
+            weightPath: rvcVoice.weight_path,
+            indexPath: rvcVoice.index_path,
+            inputHostPath: ttsPath,
+          });
+          voiceTtsPath = clonedTtsPath;
+        }
+        const filenames = await processAudioWithTtsOverlay(paths, voiceTtsPath);
         const songs: JobSong[] = filenames.map((filename, i) => ({
           id: `${Date.now()}-${i}`,
           audioUrl: audioUrl(filename),
@@ -708,6 +763,7 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
         return { songs };
       } finally {
         await fsp.unlink(ttsPath).catch(() => {});
+        if (clonedTtsPath) await fsp.unlink(clonedTtsPath).catch(() => {});
       }
     }
 
@@ -760,12 +816,13 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     };
     const hostPaths = row.sample_paths.map(resolveVoiceSamplePath);
 
-    // Flip to 'training' so the FE poll surfaces the transition. The row
-    // is left with weight/index NULL — the paired-artifact CHECK
-    // (user_voices_artifacts_paired) tolerates this because status != 'trained'.
+    // Phase D Y-2: RVC lifecycle lives on rvc_status now, leaving `status`
+    // at 'ready' so YingMusic can keep using the row in parallel. Samples
+    // are NOT purged on success — YingMusic's zero-shot path reads
+    // sample_paths[0] at inference time and would break.
     await sb
       .from("user_voices")
-      .update({ status: "training" })
+      .update({ rvc_status: "training" })
       .eq("id", row.id);
 
     console.log(`[job ${job.id}] rvc_train ${row.id} (${row.display_name}) ${p.epochs}ep`);
@@ -777,31 +834,27 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
         epochs: p.epochs,
       });
 
-      // Atomically flip to 'trained' with both artifacts set. The CHECK
-      // requires all three (weight_path, index_path, trained_at) together.
+      // Atomically flip rvc_status='trained' with all three artifacts set.
+      // The paired-artifact CHECK (migration 011) requires the trio.
       await sb
         .from("user_voices")
         .update({
-          status: "trained",
+          rvc_status: "trained",
           weight_path: weightPath,
           index_path: indexPath,
           trained_at: new Date().toISOString(),
         })
         .eq("id", row.id);
 
-      // Raw samples are no longer needed — the .pth + .index are the voice.
-      // Failure here is logged + swallowed by voice-storage.
-      await purgeVoiceSamples(row.user_id, row.id);
-
       return { songs: [] };
     } catch (e) {
-      // Mirror the job failure onto the voice row so the FE doesn't show
-      // a perpetually-spinning "학습 중" badge for a job that died. The
-      // jobs table gets its own failed flip via workerTick's catch.
+      // Mirror the job failure onto rvc_status so the FE doesn't show a
+      // perpetually-spinning "한국어 보이스 클론 준비중" badge for a job that
+      // died. The jobs table gets its own failed flip via workerTick's catch.
       const errMsg = e instanceof Error ? e.message : String(e);
       await sb
         .from("user_voices")
-        .update({ status: "failed", error: errMsg.slice(0, 500) })
+        .update({ rvc_status: "failed", error: errMsg.slice(0, 500) })
         .eq("id", row.id);
       throw e;
     }
@@ -813,7 +866,7 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     const sb = getSupabase();
     const { data: voiceRow, error: vErr } = await sb
       .from("user_voices")
-      .select("id, display_name, status, weight_path, index_path")
+      .select("id, display_name, rvc_status, weight_path, index_path")
       .eq("id", p.voiceId)
       .eq("user_id", job.user_id)
       .maybeSingle();
@@ -822,12 +875,12 @@ async function runJob(job: ClaimedJob): Promise<JobResult> {
     const row = voiceRow as {
       id: string;
       display_name: string;
-      status: string;
+      rvc_status: string;
       weight_path: string | null;
       index_path: string | null;
     };
-    if (row.status !== "trained" || !row.weight_path || !row.index_path) {
-      throw new Error(`voice ${row.id} is not trained (status=${row.status})`);
+    if (row.rvc_status !== "trained" || !row.weight_path || !row.index_path) {
+      throw new Error(`voice ${row.id} RVC not trained (rvc_status=${row.rvc_status})`);
     }
 
     console.log(`[job ${job.id}] rvc_infer ${row.id} (${row.display_name})`);

@@ -8,6 +8,7 @@ import {
   fetchVoices,
   uploadVoiceSamples,
   type UserVoice,
+  type VoiceRvcStatus,
   type VoiceStatus,
 } from "../api";
 import type { AuthUser, Tier } from "../auth";
@@ -27,6 +28,17 @@ const STATUS_LABELS: Record<VoiceStatus, { label: string; cls: string }> = {
   trained: { label: "준비 완료", cls: "voice-status-trained" },
   ready: { label: "준비 완료", cls: "voice-status-trained" },
   failed: { label: "실패", cls: "voice-status-failed" },
+};
+
+// Phase D Y-2: RVC training runs in the background after upload so the KO
+// TTS path can use the user's voice timbre. Surfaces as a separate badge
+// from the YingMusic-ready status — different lifecycle, different label.
+// 'idle' is the pre-training state right after upload; we don't show a
+// badge for it (the row is YingMusic-ready, RVC hasn't started yet).
+const RVC_STATUS_LABELS: Partial<Record<VoiceRvcStatus, { label: string; cls: string }>> = {
+  training: { label: "한국어 보이스 준비 중", cls: "voice-status-training" },
+  trained: { label: "한국어 보이스 준비 완료", cls: "voice-status-trained" },
+  failed: { label: "한국어 학습 실패", cls: "voice-status-failed" },
 };
 
 const TIER_CAP: Record<Tier, number> = { free: 1, starter: 1, pro: 3 };
@@ -59,12 +71,17 @@ export function VoicePage({ user, onRequireLogin, onShowToast }: VoicePageProps)
     return () => { cancelled = true; };
   }, [user, onShowToast]);
 
-  // Phase 2 voices land in a terminal state ('ready' or 'failed') the moment
-  // upload returns, so polling has nothing to observe most of the time. Only
-  // run the interval while a legacy RVC row is still 'uploading' or 'training'
-  // — the only states whose status changes asynchronously.
+  // Phase 2 voices land in a terminal YingMusic state ('ready' or 'failed')
+  // synchronously on upload, but Phase D Y-2 added a background RVC training
+  // job that takes ~15-25 min and transitions rvc_status from 'idle' →
+  // 'training' → 'trained'/'failed'. Poll while ANY of those async fields
+  // is in-flight so the FE surfaces the rvc badge transition.
   const hasPendingVoice = voices.some(
-    (v) => v.status === "uploading" || v.status === "training",
+    (v) =>
+      v.status === "uploading"
+      || v.status === "training"
+      || v.rvcStatus === "training"
+      || v.rvcStatus === "idle",
   );
   useEffect(() => {
     if (!user || !hasPendingVoice) return;
@@ -349,6 +366,7 @@ interface VoiceRowProps {
 
 function VoiceRow({ voice, onDelete }: VoiceRowProps) {
   const status = STATUS_LABELS[voice.status];
+  const rvc = RVC_STATUS_LABELS[voice.rvcStatus];
   const created = new Date(voice.createdAt);
   return (
     <div className="voice-row">
@@ -359,7 +377,10 @@ function VoiceRow({ voice, onDelete }: VoiceRowProps) {
         </div>
         {voice.error && <div className="voice-row-error">{voice.error}</div>}
       </div>
-      <div className={`voice-status ${status.cls}`}>{status.label}</div>
+      <div className="voice-status-stack">
+        <div className={`voice-status ${status.cls}`}>{status.label}</div>
+        {rvc && <div className={`voice-status ${rvc.cls}`}>{rvc.label}</div>}
+      </div>
       <div className="voice-row-actions">
         <button
           className="btn-ghost voice-row-btn voice-row-delete"
